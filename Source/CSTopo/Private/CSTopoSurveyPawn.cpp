@@ -1,0 +1,751 @@
+#include "CSTopoSurveyPawn.h"
+
+#include "Camera/CameraComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "CSTopoPlayerController.h"
+#include "CSTopoSurveySubsystem.h"
+#include "DrawDebugHelpers.h"
+#include "Engine/Engine.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "InputCoreTypes.h"
+
+namespace
+{
+constexpr ECollisionChannel CSTopoSurfaceCollisionChannel = ECC_GameTraceChannel1;
+
+bool IsCSTopoDerivedSurfaceComponent(const UPrimitiveComponent* Component)
+{
+    if (Component == nullptr)
+    {
+        return false;
+    }
+
+    // CharacterMovement will happily treat any blocking walkable primitive as
+    // floor. CSTopo walk mode must be stricter: only derived-surface procedural
+    // mesh tiles are valid survey ground. This prevents editor/template planes
+    // or stale invisible collision from becoming a fake surface.
+    if (Component->GetName().Contains(TEXT("SurfaceTile")))
+    {
+        return true;
+    }
+
+    const AActor* Owner = Component->GetOwner();
+    if (Owner == nullptr)
+    {
+        return false;
+    }
+
+    return Owner->GetName().Contains(TEXT("CSTopoSurface"));
+}
+}
+
+ACSTopoSurveyPawn::ACSTopoSurveyPawn()
+{
+    PrimaryActorTick.bCanEverTick = true;
+    AutoPossessPlayer = EAutoReceiveInput::Player0;
+
+    Collision = GetCapsuleComponent();
+    Collision->InitCapsuleSize(34.0f, 88.0f);
+
+    Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
+    Camera->SetupAttachment(Collision);
+    Camera->SetRelativeLocation(FVector(0.0f, 0.0f, 64.0f));
+    Camera->bUsePawnControlRotation = true;
+
+    Movement = GetCharacterMovement();
+    Movement->bOrientRotationToMovement = false;
+    Movement->bUseControllerDesiredRotation = false;
+    Movement->GravityScale = 1.0f;
+    Movement->AirControl = 0.0f;
+    Movement->BrakingFrictionFactor = 1.0f;
+
+    bUseControllerRotationYaw = true;
+    bUseControllerRotationPitch = false;
+    bUseControllerRotationRoll = false;
+
+    FlySpeedBands = {600.0f, 1800.0f, 6000.0f, 18000.0f, 54000.0f};
+    CurrentFlySpeedBandIndex = 3;
+    ConfigureMovementForMode();
+    RefreshMovementSpeed();
+    RefreshRuntimeNavigationState();
+}
+
+void ACSTopoSurveyPawn::BeginPlay()
+{
+    Super::BeginPlay();
+    const UGameInstance* GameInstance = GetGameInstance();
+    const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey != nullptr && !Survey->IsSurveyReady())
+    {
+        NavigationMode = ECSTopoNavigationMode::Fly;
+        ConfigureMovementForMode();
+        RefreshMovementSpeed();
+        RefreshRuntimeNavigationState();
+        return;
+    }
+    SetNavigationMode(NavigationMode);
+}
+
+void ACSTopoSurveyPawn::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+
+    UGameInstance* GameInstance = GetGameInstance();
+    UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey != nullptr && Camera != nullptr)
+    {
+        Survey->UpdateRuntimeStreaming(Camera->GetComponentLocation(), Camera->GetForwardVector(), DeltaSeconds);
+        Survey->UpdateSurveyMapPose(Camera->GetComponentLocation(), Camera->GetForwardVector());
+        FocusOnActivePointCloudIfNeeded();
+    }
+
+    if (NavigationMode == ECSTopoNavigationMode::Walk)
+    {
+        ValidateWalkSurface(DeltaSeconds);
+    }
+    else
+    {
+        WalkSurfaceLossTimer = 0.0f;
+    }
+
+    UpdateHoverPreview(DeltaSeconds);
+    UpdatePrecisionState(DeltaSeconds);
+}
+
+void ACSTopoSurveyPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+    Super::SetupPlayerInputComponent(PlayerInputComponent);
+}
+
+void ACSTopoSurveyPawn::SetNavigationMode(ECSTopoNavigationMode NewMode)
+{
+    if (NewMode == ECSTopoNavigationMode::Walk)
+    {
+        UGameInstance* GameInstance = GetGameInstance();
+        UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+        FString StatusMessage;
+        if (Survey != nullptr && !Survey->CanWalkActiveSurface(StatusMessage))
+        {
+            NavigationMode = ECSTopoNavigationMode::Fly;
+            Survey->ActiveProject.NavigationMode = NavigationMode;
+            Survey->SetHoverStatusLine(StatusMessage, false, false);
+            ConfigureMovementForMode();
+            RefreshMovementSpeed();
+            RefreshRuntimeNavigationState();
+            return;
+        }
+
+        if (Survey != nullptr)
+        {
+            FVector SurfaceRenderLocation = FVector::ZeroVector;
+            if (!Survey->QueryActiveSurfaceHeightAtRenderLocation(GetActorLocation(), SurfaceRenderLocation))
+            {
+                NavigationMode = ECSTopoNavigationMode::Fly;
+                Survey->ActiveProject.NavigationMode = NavigationMode;
+                Survey->SetHoverStatusLine(
+                    TEXT("Walk mode needs the pawn to be over the derived surface. Fly over the surface and press F again."),
+                    false,
+                    false);
+                ConfigureMovementForMode();
+                RefreshMovementSpeed();
+                RefreshRuntimeNavigationState();
+                return;
+            }
+
+            FVector Location = GetActorLocation();
+            Location.Z = SurfaceRenderLocation.Z + GroundClearance;
+            SetActorLocation(Location, false, nullptr, ETeleportType::TeleportPhysics);
+        }
+    }
+
+    NavigationMode = NewMode;
+    bPrecisionModeActive = false;
+    PrecisionIdleTimer = 0.0f;
+    WalkSurfaceLossTimer = 0.0f;
+    if (UGameInstance* GameInstance = GetGameInstance())
+    {
+        if (UCSTopoSurveySubsystem* Survey = GameInstance->GetSubsystem<UCSTopoSurveySubsystem>())
+        {
+            Survey->ActiveProject.NavigationMode = NavigationMode;
+        }
+    }
+    ConfigureMovementForMode();
+    RefreshMovementSpeed();
+    RefreshRuntimeNavigationState();
+}
+
+void ACSTopoSurveyPawn::ToggleNavigationMode()
+{
+    const UGameInstance* GameInstance = GetGameInstance();
+    const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey != nullptr && !Survey->IsSurveyReady())
+    {
+        return;
+    }
+
+    SetNavigationMode(NavigationMode == ECSTopoNavigationMode::Walk ? ECSTopoNavigationMode::Fly : ECSTopoNavigationMode::Walk);
+}
+
+void ACSTopoSurveyPawn::ApplySurveyMoveForward(float Value)
+{
+    RawForwardInput = Value;
+
+    const UGameInstance* GameInstance = GetGameInstance();
+    const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey != nullptr && !Survey->IsSurveyReady())
+    {
+        return;
+    }
+
+    ResolvedForwardInput = Value;
+    if (FMath::IsNearlyZero(Value))
+    {
+        return;
+    }
+
+    FVector Direction = Camera != nullptr ? Camera->GetForwardVector() : GetActorForwardVector();
+    if (NavigationMode == ECSTopoNavigationMode::Walk)
+    {
+        Direction.Z = 0.0f;
+        Direction.Normalize();
+    }
+    AddMovementInput(Direction, Value, true);
+}
+
+void ACSTopoSurveyPawn::ApplySurveyMoveRight(float Value)
+{
+    RawRightInput = Value;
+
+    const UGameInstance* GameInstance = GetGameInstance();
+    const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey != nullptr && !Survey->IsSurveyReady())
+    {
+        return;
+    }
+
+    ResolvedRightInput = Value;
+    if (FMath::IsNearlyZero(Value))
+    {
+        return;
+    }
+
+    FVector Direction = Camera != nullptr ? Camera->GetRightVector() : GetActorRightVector();
+    Direction.Z = 0.0f;
+    Direction.Normalize();
+    AddMovementInput(Direction, Value, true);
+}
+
+void ACSTopoSurveyPawn::ApplySurveyMoveUp(float Value)
+{
+    RawUpInput = Value;
+
+    const UGameInstance* GameInstance = GetGameInstance();
+    const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey != nullptr && !Survey->IsSurveyReady())
+    {
+        return;
+    }
+
+    ResolvedUpInput = NavigationMode == ECSTopoNavigationMode::Fly ? Value : 0.0f;
+    if (NavigationMode == ECSTopoNavigationMode::Fly && !FMath::IsNearlyZero(Value))
+    {
+        AddMovementInput(FVector::UpVector, Value, true);
+    }
+}
+
+void ACSTopoSurveyPawn::ApplySurveyFlySpeedStep(float Value)
+{
+    if (NavigationMode != ECSTopoNavigationMode::Fly || FMath::IsNearlyZero(Value))
+    {
+        return;
+    }
+
+    if (FlySpeedBands.IsEmpty())
+    {
+        return;
+    }
+
+    const int32 PreviousBand = CurrentFlySpeedBandIndex;
+    CurrentFlySpeedBandIndex = FMath::Clamp(CurrentFlySpeedBandIndex + (Value > 0.0f ? 1 : -1), 0, FlySpeedBands.Num() - 1);
+    if (CurrentFlySpeedBandIndex == PreviousBand)
+    {
+        return;
+    }
+
+    bPrecisionModeActive = false;
+    PrecisionIdleTimer = 0.0f;
+    RefreshMovementSpeed();
+    RefreshRuntimeNavigationState();
+
+    if (GEngine != nullptr)
+    {
+        GEngine->AddOnScreenDebugMessage(
+            -1,
+            1.75f,
+            FColor::Cyan,
+            FString::Printf(TEXT("Fly speed x%d: %.0f cm/s"), CurrentFlySpeedBandIndex + 1, GetCurrentFlyBaseSpeed()));
+    }
+}
+
+void ACSTopoSurveyPawn::ApplySurveyTurn(float Value)
+{
+    AController* CurrentController = GetController();
+    if (CurrentController == nullptr || FMath::IsNearlyZero(Value))
+    {
+        return;
+    }
+
+    const FRotator CurrentRotation = CurrentController->GetControlRotation();
+    CurrentController->SetControlRotation(FRotator(
+        CurrentRotation.Pitch,
+        CurrentRotation.Yaw + (Value * CurrentLookSensitivityScalar),
+        0.0f));
+}
+
+void ACSTopoSurveyPawn::ApplySurveyLookUp(float Value)
+{
+    AController* CurrentController = GetController();
+    if (CurrentController == nullptr || FMath::IsNearlyZero(Value))
+    {
+        return;
+    }
+
+    const FRotator CurrentRotation = CurrentController->GetControlRotation();
+    const float NewPitch = FMath::ClampAngle(
+        CurrentRotation.Pitch + (Value * CurrentLookSensitivityScalar),
+        -89.0f,
+        89.0f);
+    CurrentController->SetControlRotation(FRotator(NewPitch, CurrentRotation.Yaw, 0.0f));
+}
+
+void ACSTopoSurveyPawn::SetSurveySprintHeld(bool bHeld)
+{
+    if (bSprintHeld == bHeld)
+    {
+        return;
+    }
+
+    bSprintHeld = bHeld;
+    RefreshMovementSpeed();
+}
+
+void ACSTopoSurveyPawn::StartSprint()
+{
+    bSprintHeld = true;
+    RefreshMovementSpeed();
+}
+
+void ACSTopoSurveyPawn::StopSprint()
+{
+    bSprintHeld = false;
+    RefreshMovementSpeed();
+}
+
+void ACSTopoSurveyPawn::IncreasePointSize()
+{
+    UGameInstance* GameInstance = GetGameInstance();
+    UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr || GEngine == nullptr)
+    {
+        return;
+    }
+
+    float PointSize = 0.0f;
+    FString Message;
+    if (Survey->AdjustActivePointCloudPointSize(0.025f, PointSize, Message))
+    {
+        const FString SizeMessage = PointSize <= 0.0f
+            ? TEXT("Point size: default")
+            : FString::Printf(TEXT("Point size: %.3f"), PointSize);
+        GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Cyan, SizeMessage);
+    }
+    else if (!Message.IsEmpty())
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, Message);
+    }
+}
+
+void ACSTopoSurveyPawn::DecreasePointSize()
+{
+    UGameInstance* GameInstance = GetGameInstance();
+    UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr || GEngine == nullptr)
+    {
+        return;
+    }
+
+    float PointSize = 0.0f;
+    FString Message;
+    if (Survey->AdjustActivePointCloudPointSize(-0.025f, PointSize, Message))
+    {
+        const FString SizeMessage = PointSize <= 0.0f
+            ? TEXT("Point size: default")
+            : FString::Printf(TEXT("Point size: %.3f"), PointSize);
+        GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Cyan, SizeMessage);
+    }
+    else if (!Message.IsEmpty())
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, Message);
+    }
+}
+
+void ACSTopoSurveyPawn::CollectShot()
+{
+    const UGameInstance* ExistingGameInstance = GetGameInstance();
+    const UCSTopoSurveySubsystem* ExistingSurvey = ExistingGameInstance != nullptr ? ExistingGameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (ExistingSurvey != nullptr && !ExistingSurvey->IsSurveyReady())
+    {
+        return;
+    }
+
+    OnCollectShotRequested();
+
+    UGameInstance* GameInstance = GetGameInstance();
+    UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr || Camera == nullptr)
+    {
+        return;
+    }
+
+    FCSTopoShotRecord Shot;
+    FVector RenderLocation = FVector::ZeroVector;
+    FString Message;
+    const bool bCollected = Survey->CollectTopoShotFromView(
+        Camera->GetComponentLocation(),
+        Camera->GetForwardVector(),
+        ShotTraceRadius,
+        ShotSampleRadius,
+        Shot,
+        RenderLocation,
+        Message);
+
+    if (!bCollected)
+    {
+        if (GEngine != nullptr && !Message.IsEmpty())
+        {
+            GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Red, Message);
+        }
+        return;
+    }
+
+    const FColor ShotColor = GetShotColor(Shot);
+    DrawDebugSphere(GetWorld(), RenderLocation, ShotMarkerRadius * 1.5f, 16, ShotColor, true, -1.0f, 0, 3.0f);
+
+    if (FVector* PreviousLocation = LastRenderLocationByFigure.Find(Shot.FigureId))
+    {
+        DrawDebugLine(GetWorld(), *PreviousLocation, RenderLocation, ShotColor, true, -1.0f, 0, 10.0f);
+        DrawDebugDirectionalArrow(GetWorld(), *PreviousLocation, RenderLocation, 120.0f, ShotColor, true, -1.0f, 0, 8.0f);
+    }
+    LastRenderLocationByFigure.Add(Shot.FigureId, RenderLocation);
+
+    if (GEngine != nullptr)
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 4.0f, ShotColor, Message);
+    }
+
+    if (ACSTopoPlayerController* PlayerController = Cast<ACSTopoPlayerController>(GetController()))
+    {
+        PlayerController->RefreshPointCloudToolbar();
+    }
+}
+
+void ACSTopoSurveyPawn::TriggerCollectShot()
+{
+    CollectShot();
+}
+
+void ACSTopoSurveyPawn::UpdateHoverPreview(float DeltaSeconds)
+{
+    HoverPreviewCooldown -= DeltaSeconds;
+    if (HoverPreviewCooldown > 0.0f)
+    {
+        return;
+    }
+    HoverPreviewCooldown = 0.2f;
+
+    UGameInstance* GameInstance = GetGameInstance();
+    UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr || Camera == nullptr)
+    {
+        return;
+    }
+    if (!Survey->IsSurveyReady())
+    {
+        return;
+    }
+
+    FCSTopoMeasurementPreview Preview;
+    Survey->PreviewMeasurementAtView(
+        Camera->GetComponentLocation(),
+        Camera->GetForwardVector(),
+        ShotTraceRadius,
+        ShotSampleRadius,
+        Preview,
+        false);
+
+    Survey->SetHoverStatusLine(Preview.Message, Preview.bMeasurable, Preview.bUsesRawPoint);
+}
+
+void ACSTopoSurveyPawn::UpdatePrecisionState(float DeltaSeconds)
+{
+    UGameInstance* GameInstance = GetGameInstance();
+    UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr || !Survey->IsSurveyReady())
+    {
+        if (bPrecisionModeActive)
+        {
+            bPrecisionModeActive = false;
+            RefreshMovementSpeed();
+            RefreshRuntimeNavigationState();
+        }
+        PrecisionIdleTimer = 0.0f;
+        CurrentLookSensitivityScalar = BaseLookSensitivityScalar;
+        return;
+    }
+
+    const bool bHasMovementIntent = !FMath::IsNearlyZero(ResolvedForwardInput)
+        || !FMath::IsNearlyZero(ResolvedRightInput)
+        || (NavigationMode == ECSTopoNavigationMode::Fly && !FMath::IsNearlyZero(ResolvedUpInput));
+    const bool bCanUsePrecision = Survey->IsHoverMeasurable() && !bHasMovementIntent;
+
+    if (bCanUsePrecision)
+    {
+        PrecisionIdleTimer += DeltaSeconds;
+    }
+    else
+    {
+        PrecisionIdleTimer = 0.0f;
+    }
+
+    const bool bShouldBePrecise = bCanUsePrecision && PrecisionIdleTimer >= PrecisionIdleDelaySeconds;
+    if (bPrecisionModeActive != bShouldBePrecise)
+    {
+        bPrecisionModeActive = bShouldBePrecise;
+        RefreshMovementSpeed();
+        RefreshRuntimeNavigationState();
+    }
+
+    CurrentLookSensitivityScalar = BaseLookSensitivityScalar * (bPrecisionModeActive ? PrecisionLookSensitivityScalar : 1.0f);
+}
+
+void ACSTopoSurveyPawn::ValidateWalkSurface(float DeltaSeconds)
+{
+    if (Movement == nullptr || Movement->MovementMode != MOVE_Walking)
+    {
+        WalkSurfaceLossTimer = 0.0f;
+        return;
+    }
+
+    if (Movement->CurrentFloor.bBlockingHit
+        && Movement->CurrentFloor.IsWalkableFloor()
+        && IsCSTopoDerivedSurfaceComponent(Movement->CurrentFloor.HitResult.GetComponent()))
+    {
+        WalkSurfaceLossTimer = 0.0f;
+        return;
+    }
+
+    UGameInstance* GameInstance = GetGameInstance();
+    UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey != nullptr)
+    {
+        FVector SurfaceRenderLocation = FVector::ZeroVector;
+        if (Survey->QueryActiveSurfaceHeightAtRenderLocation(GetActorLocation(), SurfaceRenderLocation))
+        {
+            const float FloorZ = GetActorLocation().Z - GroundClearance;
+            if (FMath::Abs(FloorZ - SurfaceRenderLocation.Z) <= MaxStepHeight + 18.0f)
+            {
+                WalkSurfaceLossTimer = 0.0f;
+                return;
+            }
+        }
+    }
+
+    WalkSurfaceLossTimer += DeltaSeconds;
+    if (WalkSurfaceLossTimer < WalkSurfaceGracePeriodSeconds)
+    {
+        return;
+    }
+
+    if (GEngine != nullptr)
+    {
+        GEngine->AddOnScreenDebugMessage(
+            7772,
+            2.5f,
+            FColor::Yellow,
+            TEXT("Walk mode paused: the pawn left the derived surface. Fly back over the surface and press F again."));
+    }
+    SetNavigationMode(ECSTopoNavigationMode::Fly);
+}
+
+void ACSTopoSurveyPawn::FocusOnActivePointCloudIfNeeded()
+{
+    UGameInstance* GameInstance = GetGameInstance();
+    UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr)
+    {
+        return;
+    }
+
+    const FString ActiveSourceId = Survey->ActiveProject.ActivePointCloudId;
+    if (ActiveSourceId.IsEmpty())
+    {
+        bHasFocusedActivePointCloud = false;
+        LastFocusedPointCloudId.Empty();
+        return;
+    }
+
+    const FCSTopoPointCloudSource* Source = Survey->ActiveProject.PointClouds.FindByPredicate([&ActiveSourceId](const FCSTopoPointCloudSource& Candidate)
+    {
+        return Candidate.SourceId == ActiveSourceId;
+    });
+
+    if (Source == nullptr || !Source->bLoaded || !Source->bVisible)
+    {
+        bHasFocusedActivePointCloud = false;
+        return;
+    }
+
+    if (LastFocusedPointCloudId != ActiveSourceId)
+    {
+        bHasFocusedActivePointCloud = false;
+    }
+
+    if (bHasFocusedActivePointCloud)
+    {
+        return;
+    }
+
+    FVector FocusLocation = FVector::ZeroVector;
+    if (!Survey->GetActivePointCloudFocusLocation(FocusLocation))
+    {
+        return;
+    }
+
+    SetActorLocation(FocusLocation, false, nullptr, ETeleportType::TeleportPhysics);
+    if (AController* CurrentController = GetController())
+    {
+        const FRotator CurrentRotation = CurrentController->GetControlRotation();
+        CurrentController->SetControlRotation(FRotator(-12.0f, CurrentRotation.Yaw, 0.0f));
+    }
+
+    LastFocusedPointCloudId = ActiveSourceId;
+    bHasFocusedActivePointCloud = true;
+}
+
+void ACSTopoSurveyPawn::ConfigureMovementForMode()
+{
+    if (Movement == nullptr)
+    {
+        return;
+    }
+
+    if (Collision != nullptr)
+    {
+        // Walk needs the capsule to collide with the active derived-surface
+        // tiles only. Fly is survey navigation, not physics traversal, so it
+        // avoids all blocking collision and cannot be trapped above/below
+        // hidden surfaces or tile seams.
+        if (NavigationMode == ECSTopoNavigationMode::Walk)
+        {
+            Collision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+            Collision->SetCollisionResponseToAllChannels(ECR_Ignore);
+            Collision->SetCollisionResponseToChannel(CSTopoSurfaceCollisionChannel, ECR_Block);
+        }
+        else
+        {
+            Collision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        }
+    }
+
+    Movement->SetMovementMode(NavigationMode == ECSTopoNavigationMode::Walk ? MOVE_Walking : MOVE_Flying);
+    Movement->SetWalkableFloorAngle(WalkableFloorAngle);
+    Movement->MaxStepHeight = MaxStepHeight;
+
+    if (NavigationMode == ECSTopoNavigationMode::Walk)
+    {
+        Movement->MaxAcceleration = WalkAcceleration;
+        Movement->BrakingDecelerationWalking = WalkBrakingDeceleration;
+        Movement->BrakingDecelerationFlying = FlyBrakingDeceleration;
+    }
+    else
+    {
+        Movement->MaxAcceleration = FlyAcceleration;
+        Movement->BrakingDecelerationFlying = FlyBrakingDeceleration;
+        Movement->BrakingDecelerationWalking = WalkBrakingDeceleration;
+    }
+}
+
+void ACSTopoSurveyPawn::RefreshMovementSpeed()
+{
+    if (Movement == nullptr)
+    {
+        return;
+    }
+
+    const float BaseSpeed = NavigationMode == ECSTopoNavigationMode::Walk
+        ? (bSprintHeld ? WalkSprintSpeed : WalkSpeed)
+        : (GetCurrentFlyBaseSpeed() * (bSprintHeld ? FlyBoostMultiplier : 1.0f));
+    const float FinalSpeed = BaseSpeed * GetPrecisionMovementScalar();
+
+    Movement->MaxWalkSpeed = FinalSpeed;
+    Movement->MaxFlySpeed = FinalSpeed;
+    Movement->MaxCustomMovementSpeed = FinalSpeed;
+}
+
+void ACSTopoSurveyPawn::RefreshRuntimeNavigationState() const
+{
+    if (UGameInstance* GameInstance = GetGameInstance())
+    {
+        if (UCSTopoSurveySubsystem* Survey = GameInstance->GetSubsystem<UCSTopoSurveySubsystem>())
+        {
+            Survey->SetRuntimeNavigationState(
+                NavigationMode,
+                CurrentFlySpeedBandIndex,
+                FlySpeedBands.Num(),
+                bPrecisionModeActive);
+        }
+    }
+}
+
+float ACSTopoSurveyPawn::GetCurrentFlyBaseSpeed() const
+{
+    if (!FlySpeedBands.IsValidIndex(CurrentFlySpeedBandIndex))
+    {
+        return 18000.0f;
+    }
+
+    return FlySpeedBands[CurrentFlySpeedBandIndex];
+}
+
+float ACSTopoSurveyPawn::GetPrecisionMovementScalar() const
+{
+    return bPrecisionModeActive ? PrecisionMovementScalar : 1.0f;
+}
+
+bool ACSTopoSurveyPawn::IsPrecisionModeActive() const
+{
+    return bPrecisionModeActive;
+}
+
+int32 ACSTopoSurveyPawn::GetCurrentFlySpeedBandIndex() const
+{
+    return CurrentFlySpeedBandIndex;
+}
+
+FColor ACSTopoSurveyPawn::GetShotColor(const FCSTopoShotRecord& Shot) const
+{
+    UGameInstance* GameInstance = GetGameInstance();
+    const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey != nullptr)
+    {
+        for (const FCSTopoCodeStyle& Style : Survey->ActiveProject.CodePalette)
+        {
+            if (Style.Code.Equals(Shot.Code, ESearchCase::IgnoreCase))
+            {
+                return Style.Color.ToFColor(true);
+            }
+        }
+    }
+
+    return FColor::Yellow;
+}
