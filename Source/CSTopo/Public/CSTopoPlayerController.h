@@ -9,6 +9,7 @@ class SCSTopoPointCloudToolbar;
 class SCSTopoMainMenu;
 class SCSTopoReticle;
 class SCSTopoHomeScreen;
+class SCSTopoSurveyHud;
 class UInputAction;
 class UInputMappingContext;
 struct FInputActionValue;
@@ -52,6 +53,7 @@ private:
     enum class ESurveyInputMode : uint8
     {
         Game,
+        CollectorUI,
         ModalUI
     };
 
@@ -63,6 +65,8 @@ private:
     TSharedPtr<SWidget> ReticleContainer;
     TSharedPtr<SWidget> SurveyStatusOverlay;
     TSharedPtr<SWidget> SurveyStatusOverlayContainer;
+    TSharedPtr<SCSTopoSurveyHud> SurveyHud;
+    TSharedPtr<SWidget> SurveyHudContainer;
     TSharedPtr<SCSTopoHomeScreen> HomeScreen;
     TSharedPtr<SWidget> HomeScreenContainer;
     FString PendingStartupProjectPath;
@@ -84,6 +88,10 @@ private:
     TObjectPtr<UInputAction> FlySpeedAction;
     UPROPERTY(Transient)
     TObjectPtr<UInputAction> ToggleNavigationAction;
+    UPROPERTY(Transient)
+    TObjectPtr<UInputAction> ToggleUserTinAction;
+    UPROPERTY(Transient)
+    TObjectPtr<UInputAction> UndoAction;
     UPROPERTY(Transient)
     TObjectPtr<UInputAction> SprintAction;
     UPROPERTY(Transient)
@@ -107,6 +115,7 @@ private:
     void RetrySurfaceBuild();
     void CancelToHome();
     void CollectShotFromSurveyHud();
+    void UndoLastMeasurementFromSurveyHud();
     void MonitorStartupSurfaceBuild();
     bool GetActiveSource(class UCSTopoSurveySubsystem* Survey, FCSTopoPointCloudSource*& Source) const;
     void SetActiveCodeByPaletteIndex(int32 PaletteIndex);
@@ -124,6 +133,8 @@ private:
     void HandleLookPitchInput(const FInputActionValue& Value);
     void HandleFlySpeedInput(const FInputActionValue& Value);
     void HandleToggleNavigationInput();
+    void HandleToggleUserTinInput();
+    void HandleUndoInput();
     void HandleSprintStarted();
     void HandleSprintCompleted();
     void HandleCollectShotInput();

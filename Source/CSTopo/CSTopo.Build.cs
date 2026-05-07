@@ -12,6 +12,7 @@ public class CSTopo : ModuleRules
             "CoreUObject",
             "Engine",
             "EnhancedInput",
+            "GeometryCore",
             "Json",
             "JsonUtilities",
             "InputCore",

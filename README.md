@@ -42,8 +42,8 @@ This repository currently contains:
 - `Left Shift`: sprint / fast-move
 - `Q/E`: descend/ascend in fly mode
 - `Left Mouse`: request shot collection
-- `Tab`: reserved for future modal survey UI; active survey navigation remains non-focusable
-- `1-4`: switch active code using the first four code-palette entries (`EOP`, `CL`, `FL`, `GB` by default)
+- `Tab`: toggles the survey data collector; when open, the mouse is released and the collector can change the active code
+- `1-4`: switch active code using the first four code-palette entries from the embedded survey code list
 - When a point cloud becomes the active loaded cloud, the pawn recenters to the cloud's middle in source space so you start inside the dataset instead of stranded elsewhere in the level.
 
 ## Movement System Guardrails
@@ -53,7 +53,7 @@ The survey movement system has a few non-obvious pieces that are intentional. Pl
 - `ACSTopoPlayerController` is the single owner of survey input. Keep `WASD`, `Q/E`, `F`, mouse wheel, mouse look, `Tab`, `Escape`, `1-4`, and shot-click routing in the controller instead of moving decision-making back into the pawn.
 - Survey controls use Unreal Enhanced Input. Do not reintroduce `InputKey` routing, Slate keyboard preprocessors, Windows `GetAsyncKeyState`, or legacy per-frame key polling for movement.
 - `ACSTopoSurveyPawn` remains an `ACharacter`, and survey locomotion should route through `AddMovementInput`, `AddControllerYawInput`, `AddControllerPitchInput`, and `UCharacterMovementComponent` modes.
-- Active survey UI must stay non-focusable. Keep startup/open/import UI before survey begins, but do not add editable boxes, buttons, or focusable Slate panels to active navigation.
+- The active survey data collector is the one focusable in-survey UI surface. Keep its focus behind the `Tab` toggle, and keep movement/look input owned by game mode only.
 - Fly mode uses `MOVE_Flying`, camera-relative `WASD`, and `Q/E` vertical input. Walk mode uses `MOVE_Walking` and requires a ready derived surface.
 - Walk collision is intentionally narrow: derived-surface procedural tiles use `ECC_GameTraceChannel1`, and the pawn capsule blocks only that channel in walk mode. Fly mode disables capsule collision so hidden/editor/level collision cannot trap the surveyor above or below an invisible plane.
 - Do not reintroduce old always-on idle Z snapping. Entering walk may land the character on the surface; normal walk should be owned by CharacterMovement and floor collision.
@@ -76,7 +76,7 @@ When Play starts, CSTopo shows a full-screen home menu instead of dropping you i
 
 The point-cloud import workflow creates the project first, reads source metadata and units, imports the cloud into the project-local cache path, starts/reuses the derived surface build, and waits at the home/progress screen until the surface is ready. Once ready, CSTopo hides the home screen, shows the reticle/runtime menu, and places the pawn near the center of the active surface.
 
-After the app enters survey mode, CSTopo shows only the reticle and a small non-focusable survey status overlay. Active survey navigation should not depend on any focusable HUD widget.
+After the app enters survey mode, CSTopo shows the reticle, a small status overlay, and the top-right data collector. The collector remains visible for status, but its editable search and buttons become interactive only after pressing `Tab`.
 
 The point-cloud manager is startup/import tooling and should not be part of active survey navigation.
 

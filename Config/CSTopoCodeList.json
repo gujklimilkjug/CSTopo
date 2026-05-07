@@ -1,0 +1,3395 @@
+{
+  "schema_version": "1.0",
+  "source_workbook": "G:/My Drive/Vibe-Coding Projects/TopoSurveyor/CodeList.xlsx",
+  "sheet": "Code List",
+  "categories": [
+    {
+      "name": "MONUMENT",
+      "color": "#CC9900",
+      "code_count": 41,
+      "color_name": "ochre gold"
+    },
+    {
+      "name": "BUILDING",
+      "color": "#D9D9D9",
+      "code_count": 12,
+      "color_name": "light gray"
+    },
+    {
+      "name": "CULVERT",
+      "color": "#D0DFE6",
+      "code_count": 10,
+      "color_name": "pale blue gray"
+    },
+    {
+      "name": "CURB & GUTTER",
+      "color": "#AEAEAE",
+      "code_count": 8,
+      "color_name": "medium gray"
+    },
+    {
+      "name": "ELECTRIC",
+      "color": "#FF0000",
+      "code_count": 12,
+      "color_name": "red"
+    },
+    {
+      "name": "FENCE",
+      "color": "#DCEDD5",
+      "code_count": 13,
+      "color_name": "pale green"
+    },
+    {
+      "name": "GAS",
+      "color": "#FFFF00",
+      "code_count": 9,
+      "color_name": "yellow"
+    },
+    {
+      "name": "GEOLOGY",
+      "color": "#E97132",
+      "code_count": 2,
+      "color_name": "orange"
+    },
+    {
+      "name": "GUARDRAIL",
+      "color": "#D9D9D9",
+      "code_count": 7,
+      "color_name": "light gray"
+    },
+    {
+      "name": "LANDSCAPE",
+      "color": "#95CA82",
+      "code_count": 12,
+      "color_name": "soft green"
+    },
+    {
+      "name": "LIGHTING",
+      "color": "#FF0000",
+      "code_count": 2,
+      "color_name": "red"
+    },
+    {
+      "name": "MISCELLANEOUS",
+      "color": "#C680BE",
+      "code_count": 16,
+      "color_name": "mauve"
+    },
+    {
+      "name": "OIL",
+      "color": "#FFFF00",
+      "code_count": 6,
+      "color_name": "yellow"
+    },
+    {
+      "name": "RAILROAD",
+      "color": "#ECD5E9",
+      "code_count": 8,
+      "color_name": "pale mauve"
+    },
+    {
+      "name": "ROAD",
+      "color": "#AEAEAE",
+      "code_count": 35,
+      "color_name": "medium gray"
+    },
+    {
+      "name": "SEWER-SANITARY",
+      "color": "#92D050",
+      "code_count": 12,
+      "color_name": "bright green"
+    },
+    {
+      "name": "SIDEWALK",
+      "color": "#D1D1D1",
+      "code_count": 3,
+      "color_name": "light gray"
+    },
+    {
+      "name": "SIGNS",
+      "color": "#D9AAD4",
+      "code_count": 6,
+      "color_name": "soft pink purple"
+    },
+    {
+      "name": "SEWER-STORM",
+      "color": "#00B050",
+      "code_count": 10,
+      "color_name": "green"
+    },
+    {
+      "name": "BIRDGE & WALLS",
+      "color": "#D1D1D1",
+      "code_count": 18,
+      "color_name": "light gray"
+    },
+    {
+      "name": "TELEPHONE",
+      "color": "#FFC000",
+      "code_count": 14,
+      "color_name": "amber"
+    },
+    {
+      "name": "TELEVISION",
+      "color": "#FF9900",
+      "code_count": 9,
+      "color_name": "orange"
+    },
+    {
+      "name": "TERRAIN",
+      "color": "#AF5526",
+      "code_count": 12,
+      "color_name": "brown orange"
+    },
+    {
+      "name": "TRAFFIC",
+      "color": "#B8DCAB",
+      "code_count": 10,
+      "color_name": "light green"
+    },
+    {
+      "name": "WATER",
+      "color": "#73A0B4",
+      "code_count": 25,
+      "color_name": "muted blue"
+    },
+    {
+      "name": "WATERWAY",
+      "color": "#E7E9EC",
+      "code_count": 11,
+      "color_name": "very light gray"
+    }
+  ],
+  "codes": [
+    {
+      "category": "MONUMENT",
+      "name": "Axle",
+      "code": "AXLE",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#905E04",
+      "category_color_name": "ochre gold",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Bench Mark",
+      "code": "BM",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#936104",
+      "category_color_name": "ochre gold",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Bolt",
+      "code": "BOLT",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#966304",
+      "category_color_name": "ochre gold",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Cap Alloy Found",
+      "code": "ALCAPF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#986604",
+      "category_color_name": "ochre gold",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Cap Alloy Set",
+      "code": "ALCAPS",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#9B6904",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Cap Brass Found",
+      "code": "BRCAPF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#9E6B04",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Cap Brass Set",
+      "code": "BRCAPS",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#A16E04",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Cap Plastic Found",
+      "code": "PLCAP",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#A37104",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Concrete Found",
+      "code": "CMONF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#A67304",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Control Traverse",
+      "code": "TRAV",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#A97604",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Control Traverse_1",
+      "code": "TPSPK",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#AC7904",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "GPS Control Point Found",
+      "code": "GPSF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#AE7C04",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "GPS Control Point Set",
+      "code": "GPSS",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#B17F05",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Iron Pipe Found",
+      "code": "IRPIPEF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#B48205",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Iron Pipe Set",
+      "code": "IRPIPES",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#B68405",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Iron Rod Found",
+      "code": "IRRODF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#B98705",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Miscellaneous",
+      "code": "MSCMT",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#BC8A05",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Miscellaneous_1",
+      "code": "MSMNT",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#BF8D05",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "PK Found",
+      "code": "PKF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#C19005",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "PK Set",
+      "code": "PKS",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#C49305",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Property Line Existing",
+      "code": "LINEPL",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#C79605",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Railroad Right-of-Way Line Existing",
+      "code": "RRRW",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#CA9A05",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Railroad Spike Found",
+      "code": "RRSPKF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#CC9D05",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Railroad Spike Set",
+      "code": "RRSPKS",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#CFA005",
+      "category_color_name": "ochre gold",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Rebar Number Five Found",
+      "code": "BARFFV",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#D2A305",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Rebar Number Five Set",
+      "code": "BARSFV",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#D5A605",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Rebar Number Four Found",
+      "code": "BARFHF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#D7A906",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Rebar Number Four Set",
+      "code": "BARSHF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#DAAD06",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Rebar Number Six Found",
+      "code": "BARFSX",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#DDB006",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Rebar Number Six Set",
+      "code": "BARSSX",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#E0B306",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Right-of-Way Line Existing",
+      "code": "RW",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#E2B706",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Right-of-Way Line Existing with Fence",
+      "code": "RWF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#E5BA06",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Right-of-Way Marker Found",
+      "code": "RWM",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#E8BD06",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Section Corner",
+      "code": "SCRN",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#EAC106",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Section Quarter Corner",
+      "code": "SCRNQ",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#EDC406",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Section Sixteenth Corner",
+      "code": "SCRNSIX",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#F0C806",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Spike Found",
+      "code": "SPKF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#F3CB06",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Spike Set",
+      "code": "SPKS",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#F5CF06",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Stainless Steel Rod Found",
+      "code": "SROD",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#F8D306",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Stone Found",
+      "code": "STONEF",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#F9D509",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "MONUMENT",
+      "name": "Survey Marker Miscellaneous",
+      "code": "MARKER",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#CC9900",
+      "color": "#F9D60B",
+      "category_color_name": "ochre gold",
+      "color_name": "yellow"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Concrete Pad",
+      "code": "BLDPAD",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#CFAAAE",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Deck",
+      "code": "DECK",
+      "point_type": "Line Feature",
+      "category_color": "#D9D9D9",
+      "color": "#D3B1B4",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Dock",
+      "code": "DOCK",
+      "point_type": "Line Feature",
+      "category_color": "#D9D9D9",
+      "color": "#D7B8BA",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Eave",
+      "code": "EAVE",
+      "point_type": "Line Feature",
+      "category_color": "#D9D9D9",
+      "color": "#DABEBF",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Footprint",
+      "code": "BLD",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DEC4C5",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Foundation",
+      "code": "FNDTN",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DEC4C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Grain Bin",
+      "code": "GRBIN",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DEC4C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "House",
+      "code": "HOME",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DEC5C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Ridgeline",
+      "code": "RIDGE",
+      "point_type": "Line Feature",
+      "category_color": "#D9D9D9",
+      "color": "#DEC5C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Silo",
+      "code": "SILO",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DEC6C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Stairs",
+      "code": "STAIRS",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DEC6C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BUILDING",
+      "name": "Steps",
+      "code": "STEP",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DEC7C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Cast Iron",
+      "code": "CULVCIP",
+      "point_type": "Line Feature",
+      "category_color": "#D0DFE6",
+      "color": "#ADC9D1",
+      "category_color_name": "pale blue gray",
+      "color_name": "light teal"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Corrugated Plastic Pipe",
+      "code": "CULVCPP",
+      "point_type": "Line Feature",
+      "category_color": "#D0DFE6",
+      "color": "#B0D0DA",
+      "category_color_name": "pale blue gray",
+      "color_name": "light teal"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Corrugated Steel Pipe",
+      "code": "CMP",
+      "point_type": "Line Feature",
+      "category_color": "#D0DFE6",
+      "color": "#BDD2DA",
+      "category_color_name": "pale blue gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Corrugated Steel Pipe_1",
+      "code": "CULVCMP",
+      "point_type": "Line Feature",
+      "category_color": "#D0DFE6",
+      "color": "#C0D8E2",
+      "category_color_name": "pale blue gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Perforated Underdrain CMP",
+      "code": "UDRNCMP",
+      "point_type": "Line Feature",
+      "category_color": "#D0DFE6",
+      "color": "#C4D6DE",
+      "category_color_name": "pale blue gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Perforated Underdrain Other",
+      "code": "UDRN",
+      "point_type": "Line Feature",
+      "category_color": "#D0DFE6",
+      "color": "#C0D7E2",
+      "category_color_name": "pale blue gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Perforated Underdrain PVC",
+      "code": "UDRNPVC",
+      "point_type": "Line Feature",
+      "category_color": "#D0DFE6",
+      "color": "#C4D5DE",
+      "category_color_name": "pale blue gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Pipe End",
+      "code": "PEND",
+      "point_type": "Point",
+      "category_color": "#D0DFE6",
+      "color": "#C0D5E2",
+      "category_color_name": "pale blue gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Pipe Miscellaneous",
+      "code": "CULVMISC",
+      "point_type": "Point",
+      "category_color": "#D0DFE6",
+      "color": "#C4D4DE",
+      "category_color_name": "pale blue gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "CULVERT",
+      "name": "Reinforced Concrete Pipe",
+      "code": "CULVRCP",
+      "point_type": "Line Feature",
+      "category_color": "#D0DFE6",
+      "color": "#C0D4E2",
+      "category_color_name": "pale blue gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "CURB & GUTTER",
+      "name": "Back of Curb",
+      "code": "BCRB",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B0737A",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "CURB & GUTTER",
+      "name": "Back of Curb",
+      "code": "TBC",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B67E82",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "CURB & GUTTER",
+      "name": "Curb",
+      "code": "CURB",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#BC888A",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "CURB & GUTTER",
+      "name": "Face of Curb",
+      "code": "FCRB",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C29293",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "CURB & GUTTER",
+      "name": "Gutter",
+      "code": "GUT",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C89D9C",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "CURB & GUTTER",
+      "name": "Gutter Flow LIne",
+      "code": "GUTFL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#CDA8A7",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "CURB & GUTTER",
+      "name": "Lip of Gutter",
+      "code": "GUTLIP",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D3B4B1",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "CURB & GUTTER",
+      "name": "Top of Curb",
+      "code": "TCRB",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D9BEBB",
+      "category_color_name": "medium gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Cable",
+      "code": "ELINE",
+      "point_type": "Line Feature",
+      "category_color": "#FF0000",
+      "color": "#C20519",
+      "category_color_name": "red",
+      "color_name": "deep red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Cable Marker",
+      "code": "EMARK",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#CC0516",
+      "category_color_name": "red",
+      "color_name": "deep red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Cable Overhead Existing",
+      "code": "ELINEOHEX",
+      "point_type": "Line Feature",
+      "category_color": "#FF0000",
+      "color": "#D60513",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Cable Overhead Proposed",
+      "code": "ELINEOHPROP",
+      "point_type": "Line Feature",
+      "category_color": "#FF0000",
+      "color": "#E00610",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Guy Wire Power Line",
+      "code": "EGUY",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#EA060D",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Junction Box",
+      "code": "EJBX",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#F40609",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Manhole",
+      "code": "EMH",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#F90E0B",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Meter",
+      "code": "EMTR",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#F91C15",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Miscellaneous",
+      "code": "EMISC",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#F92A1F",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Power Pole",
+      "code": "EPOLE",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#FA3729",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Power Pole1",
+      "code": "PPOLE",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#FA4433",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "ELECTRIC",
+      "name": "Vault",
+      "code": "EVAULT",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#FA513D",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "FENCE",
+      "name": "As Noted",
+      "code": "FNC",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#C0DBAF",
+      "category_color_name": "pale green",
+      "color_name": "light green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Barbed Wire",
+      "code": "FENB",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#C4E2B1",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Cattleguard",
+      "code": "CTLG",
+      "point_type": "Breakline",
+      "category_color": "#DCEDD5",
+      "color": "#C9E1BC",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Chain Link",
+      "code": "FENCHN",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#CBE6BC",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Combination Wire",
+      "code": "CMBOFEN",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#CBE3C0",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Corner",
+      "code": "FCOR",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#DCEDD5",
+      "color": "#C9E6BC",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Electric",
+      "code": "FENE",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#CAE3C0",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Gate",
+      "code": "GATE",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#C8E6BC",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Line",
+      "code": "FEN",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#C9E3C0",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Other",
+      "code": "FENCE",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#C6E6BC",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Silt",
+      "code": "SILTFEN",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#C7E3C0",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Snow",
+      "code": "SNOWFEN",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#C5E6BC",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "FENCE",
+      "name": "Wood",
+      "code": "FENW",
+      "point_type": "Line Feature",
+      "category_color": "#DCEDD5",
+      "color": "#C6E3C0",
+      "category_color_name": "pale green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "GAS",
+      "name": "Air Vent",
+      "code": "GVENT",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#FFFF00",
+      "color": "#C2AE05",
+      "category_color_name": "yellow",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "GAS",
+      "name": "Line",
+      "code": "GLINE",
+      "point_type": "Line Feature",
+      "category_color": "#FFFF00",
+      "color": "#D0C005",
+      "category_color_name": "yellow",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "GAS",
+      "name": "Line High Pressure",
+      "code": "GLINEHP",
+      "point_type": "Line Feature",
+      "category_color": "#FFFF00",
+      "color": "#DDD206",
+      "category_color_name": "yellow",
+      "color_name": "yellow"
+    },
+    {
+      "category": "GAS",
+      "name": "Line Marker",
+      "code": "GMARK",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#EBE506",
+      "category_color_name": "yellow",
+      "color_name": "yellow"
+    },
+    {
+      "category": "GAS",
+      "name": "Meter",
+      "code": "GMTR",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#F9F906",
+      "category_color_name": "yellow",
+      "color_name": "yellow"
+    },
+    {
+      "category": "GAS",
+      "name": "Miscellaneous",
+      "code": "GMISC",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#F3F914",
+      "category_color_name": "yellow",
+      "color_name": "yellow"
+    },
+    {
+      "category": "GAS",
+      "name": "Propane Tank",
+      "code": "PTANK",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#EEF922",
+      "category_color_name": "yellow",
+      "color_name": "green"
+    },
+    {
+      "category": "GAS",
+      "name": "Riser",
+      "code": "GRSR",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#EAFA2F",
+      "category_color_name": "yellow",
+      "color_name": "green"
+    },
+    {
+      "category": "GAS",
+      "name": "Valve",
+      "code": "GVLV",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#E6FA3D",
+      "category_color_name": "yellow",
+      "color_name": "green"
+    },
+    {
+      "category": "GEOLOGY",
+      "name": "Test Hole",
+      "code": "BH",
+      "point_type": "Point",
+      "category_color": "#E97132",
+      "color": "#CB4318",
+      "category_color_name": "orange",
+      "color_name": "red"
+    },
+    {
+      "category": "GEOLOGY",
+      "name": "Test Pit",
+      "code": "TESTPIT",
+      "point_type": "Point",
+      "category_color": "#E97132",
+      "color": "#F4A260",
+      "category_color_name": "orange",
+      "color_name": "light orange"
+    },
+    {
+      "category": "GUARDRAIL",
+      "name": "Cable",
+      "code": "GRCABLE",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#CFAAAE",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "GUARDRAIL",
+      "name": "Cable 2",
+      "code": "GRAILC",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#D6B6B9",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "GUARDRAIL",
+      "name": "Concrete",
+      "code": "CRAIL",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DDC2C3",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "GUARDRAIL",
+      "name": "End Anchor",
+      "code": "GRANCH",
+      "point_type": "Point",
+      "category_color": "#D9D9D9",
+      "color": "#DEC4C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "GUARDRAIL",
+      "name": "Metal",
+      "code": "MRAIL",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DEC5C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "GUARDRAIL",
+      "name": "Metal 2",
+      "code": "GRAILM",
+      "point_type": "Breakline",
+      "category_color": "#D9D9D9",
+      "color": "#DEC6C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "GUARDRAIL",
+      "name": "Post",
+      "code": "GRPOST",
+      "point_type": "Point",
+      "category_color": "#D9D9D9",
+      "color": "#DEC7C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Bush",
+      "code": "BUSH",
+      "point_type": "Point",
+      "category_color": "#95CA82",
+      "color": "#7EB75D",
+      "category_color_name": "soft green",
+      "color_name": "green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Bush Boundary",
+      "code": "BUSHB",
+      "point_type": "Line Feature",
+      "category_color": "#95CA82",
+      "color": "#7FC35B",
+      "category_color_name": "soft green",
+      "color_name": "green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Coniferous Tree",
+      "code": "CTREE",
+      "point_type": "Point",
+      "category_color": "#95CA82",
+      "color": "#86BD6B",
+      "category_color_name": "soft green",
+      "color_name": "green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Coniferous Tree_1",
+      "code": "TREEC",
+      "point_type": "Point",
+      "category_color": "#95CA82",
+      "color": "#87C96A",
+      "category_color_name": "soft green",
+      "color_name": "green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Cultivation Boundary",
+      "code": "LNDSCP",
+      "point_type": "Line Feature",
+      "category_color": "#95CA82",
+      "color": "#8FC479",
+      "category_color_name": "soft green",
+      "color_name": "green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Deciduous Tree",
+      "code": "DTREE",
+      "point_type": "Point",
+      "category_color": "#95CA82",
+      "color": "#90CE79",
+      "category_color_name": "soft green",
+      "color_name": "light green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Deciduous Tree_1",
+      "code": "TREED",
+      "point_type": "Point",
+      "category_color": "#95CA82",
+      "color": "#98CA87",
+      "category_color_name": "soft green",
+      "color_name": "light green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Embankment Protector",
+      "code": "EMBNK",
+      "point_type": "Point",
+      "category_color": "#95CA82",
+      "color": "#9AD388",
+      "category_color_name": "soft green",
+      "color_name": "light green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Miscellaneous",
+      "code": "LNDSCPMSC",
+      "point_type": "Point",
+      "category_color": "#95CA82",
+      "color": "#A2D095",
+      "category_color_name": "soft green",
+      "color_name": "light green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Stump",
+      "code": "STUMP",
+      "point_type": "Point",
+      "category_color": "#95CA82",
+      "color": "#A4D997",
+      "category_color_name": "soft green",
+      "color_name": "light green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Tree",
+      "code": "TREE",
+      "point_type": "Point",
+      "category_color": "#95CA82",
+      "color": "#ADD6A4",
+      "category_color_name": "soft green",
+      "color_name": "light green"
+    },
+    {
+      "category": "LANDSCAPE",
+      "name": "Tree Boundary",
+      "code": "TREEB",
+      "point_type": "Line Feature",
+      "category_color": "#95CA82",
+      "color": "#AFDEA6",
+      "category_color_name": "soft green",
+      "color_name": "light green"
+    },
+    {
+      "category": "LIGHTING",
+      "name": "Luminaire Pole",
+      "code": "LPOLE",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#C20519",
+      "category_color_name": "red",
+      "color_name": "deep red"
+    },
+    {
+      "category": "LIGHTING",
+      "name": "Other",
+      "code": "LIGHTNG",
+      "point_type": "Point",
+      "category_color": "#FF0000",
+      "color": "#FA513D",
+      "category_color_name": "red",
+      "color_name": "red"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Topo Misc White Claw Can",
+      "code": "WCCAN",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#B25CB1",
+      "category_color_name": "mauve",
+      "color_name": "pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Above Ground Fuel Tank",
+      "code": "FTANKAG",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#BE57BC",
+      "category_color_name": "mauve",
+      "color_name": "pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Bollard",
+      "code": "BOLLARD",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#B766B4",
+      "category_color_name": "mauve",
+      "color_name": "pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Concrete Pad",
+      "code": "PADC",
+      "point_type": "Breakline",
+      "category_color": "#C680BE",
+      "color": "#C262BD",
+      "category_color_name": "mauve",
+      "color_name": "pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Feature Line",
+      "code": "ML",
+      "point_type": "Breakline",
+      "category_color": "#C680BE",
+      "color": "#BC70B7",
+      "category_color_name": "mauve",
+      "color_name": "pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Flag Pole",
+      "code": "FLAG",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#C66DBF",
+      "category_color_name": "mauve",
+      "color_name": "pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Flat Asphalt",
+      "code": "PADA",
+      "point_type": "Breakline",
+      "category_color": "#C680BE",
+      "color": "#C17ABA",
+      "category_color_name": "mauve",
+      "color_name": "pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Flat Concrete",
+      "code": "CON",
+      "point_type": "Breakline",
+      "category_color": "#C680BE",
+      "color": "#CA78C2",
+      "category_color_name": "mauve",
+      "color_name": "pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Gas Pump",
+      "code": "FUELP",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#C584BD",
+      "category_color_name": "mauve",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Item",
+      "code": "MISC",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#CF83C4",
+      "category_color_name": "mauve",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Junction Box",
+      "code": "MJBX",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#CA8FC1",
+      "category_color_name": "mauve",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Mailbox",
+      "code": "MBOX",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#D38DC7",
+      "category_color_name": "mauve",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Manhole Type Unknown",
+      "code": "MHMISC",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#CF99C5",
+      "category_color_name": "mauve",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Riser",
+      "code": "MRISER",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#D798CB",
+      "category_color_name": "mauve",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Satellite Dish",
+      "code": "DISH",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#D4A3CA",
+      "category_color_name": "mauve",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "MISCELLANEOUS",
+      "name": "Underground Fuel Tank",
+      "code": "FTANKUG",
+      "point_type": "Point",
+      "category_color": "#C680BE",
+      "color": "#DBA3CF",
+      "category_color_name": "mauve",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "OIL",
+      "name": "Line",
+      "code": "OLINE",
+      "point_type": "Line Feature",
+      "category_color": "#FFFF00",
+      "color": "#C2AE05",
+      "category_color_name": "yellow",
+      "color_name": "deep yellow"
+    },
+    {
+      "category": "OIL",
+      "name": "Line Marker",
+      "code": "OMARK",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#D8CB06",
+      "category_color_name": "yellow",
+      "color_name": "yellow"
+    },
+    {
+      "category": "OIL",
+      "name": "Meter",
+      "code": "OMTR",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#EEE906",
+      "category_color_name": "yellow",
+      "color_name": "yellow"
+    },
+    {
+      "category": "OIL",
+      "name": "Miscellaneous",
+      "code": "OMISC",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#F4F911",
+      "category_color_name": "yellow",
+      "color_name": "yellow"
+    },
+    {
+      "category": "OIL",
+      "name": "Riser",
+      "code": "ORSR",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#ECF927",
+      "category_color_name": "yellow",
+      "color_name": "green"
+    },
+    {
+      "category": "OIL",
+      "name": "Valve",
+      "code": "OVLV",
+      "point_type": "Point",
+      "category_color": "#FFFF00",
+      "color": "#E6FA3D",
+      "category_color_name": "yellow",
+      "color_name": "green"
+    },
+    {
+      "category": "RAILROAD",
+      "name": "Bridge",
+      "code": "RRBRDG",
+      "point_type": "Breakline",
+      "category_color": "#ECD5E9",
+      "color": "#D9B0D8",
+      "category_color_name": "pale mauve",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "RAILROAD",
+      "name": "Protective Device",
+      "code": "RRDEV",
+      "point_type": "Point",
+      "category_color": "#ECD5E9",
+      "color": "#E3B6E0",
+      "category_color_name": "pale mauve",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "RAILROAD",
+      "name": "Signal",
+      "code": "RRSINGL",
+      "point_type": "Point",
+      "category_color": "#ECD5E9",
+      "color": "#E1C1DF",
+      "category_color_name": "pale mauve",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "RAILROAD",
+      "name": "Signal Cabinet",
+      "code": "RRCAB",
+      "point_type": "Point",
+      "category_color": "#ECD5E9",
+      "color": "#E5BDE1",
+      "category_color_name": "pale mauve",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "RAILROAD",
+      "name": "Switch",
+      "code": "RRSW",
+      "point_type": "Point",
+      "category_color": "#ECD5E9",
+      "color": "#E1C1DD",
+      "category_color_name": "pale mauve",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "RAILROAD",
+      "name": "Top of Rail A",
+      "code": "RRA",
+      "point_type": "Line Feature",
+      "category_color": "#ECD5E9",
+      "color": "#E5BDDE",
+      "category_color_name": "pale mauve",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "RAILROAD",
+      "name": "Top of Rail B",
+      "code": "RRB",
+      "point_type": "Line Feature",
+      "category_color": "#ECD5E9",
+      "color": "#E1C1DB",
+      "category_color_name": "pale mauve",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "RAILROAD",
+      "name": "Track Centerline",
+      "code": "RRCL",
+      "point_type": "Line Feature",
+      "category_color": "#ECD5E9",
+      "color": "#E5BDDC",
+      "category_color_name": "pale mauve",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "ROAD",
+      "name": "Approach Paved Rural",
+      "code": "APPR",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B0737A",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Approach Unpaved Rural",
+      "code": "APPRU",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B2767B",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Approach Urban",
+      "code": "APPRUPR",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B3787D",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Centerline Dirt Road",
+      "code": "CLDIRT",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B47A7F",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Centerline Driveway",
+      "code": "CLDW",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B57C80",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Centerline Road",
+      "code": "CLRD",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B67E82",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Cross Walk",
+      "code": "CROSSWALK",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B88084",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Crown of Road",
+      "code": "CRWN",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#B98286",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Double Yellow Lane Line",
+      "code": "DBLYEL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#BA8487",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Edge of Driveway",
+      "code": "EDW",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#BB8689",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Edge of Driveway1",
+      "code": "DW",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#BC898B",
+      "category_color_name": "medium gray",
+      "color_name": "muted red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Edge of Gravel",
+      "code": "EOG",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#BE8B8D",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Edge of Gravel 2",
+      "code": "EGVL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#BF8D8E",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Edge of Parking Lot",
+      "code": "APAD",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C08F90",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Edge of Road",
+      "code": "EO",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C19192",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Lane Line",
+      "code": "FOG",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C29394",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Miscellaneous",
+      "code": "RDWMSC",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C39595",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Parking",
+      "code": "PARKING",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C59797",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Shoulder",
+      "code": "SHLD",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C69A99",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Skip Solid White Lane Line (looking up station)",
+      "code": "SKPSLDWHTE",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C79C9C",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Skip Solid Yellow Lane Line (looking up station)",
+      "code": "SKPSLDYEL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C89E9E",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Skip White Lane Line",
+      "code": "SKPWHTE",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#C9A1A0",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Skip Yellow Lane Line",
+      "code": "SKPYEL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#CBA3A2",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Solid Skip White Lane Line (looking up station)",
+      "code": "SLDSKPWHTE",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#CCA5A4",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Solid Skip Yellow Lane Line (looking up station)",
+      "code": "SLDSKPYEL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#CDA8A6",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Solid White Lane Line",
+      "code": "SLDWHTE",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#CEAAA8",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Solid Yellow Lane Line",
+      "code": "SLDYEL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#CFACAA",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Stop Bar",
+      "code": "STOPBAR",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D1AFAC",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Trail",
+      "code": "TRAIL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D2B1AF",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Turn Arrow Left White",
+      "code": "ARWLTWHTE",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D3B3B1",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Turn Arrow Left Yellow",
+      "code": "ARWLTYEL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D4B5B3",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Turn Arrow Right White",
+      "code": "ARWRTWHTE",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D5B8B5",
+      "category_color_name": "medium gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Turn Arrow Right Yellow",
+      "code": "ARWRTYEL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D7BAB7",
+      "category_color_name": "medium gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Turn Arrow Straight White",
+      "code": "ARWSTWHTE",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D8BCB9",
+      "category_color_name": "medium gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "ROAD",
+      "name": "Turn Arrow Straight Yellow",
+      "code": "ARWSTYEL",
+      "point_type": "Breakline",
+      "category_color": "#AEAEAE",
+      "color": "#D9BEBB",
+      "category_color_name": "medium gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Cast Iron Pipe",
+      "code": "SNCIP",
+      "point_type": "Line Feature",
+      "category_color": "#92D050",
+      "color": "#84B433",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Ductile Iron Pipe",
+      "code": "SNDIP",
+      "point_type": "Line Feature",
+      "category_color": "#92D050",
+      "color": "#89C62C",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Plastic Pipe",
+      "code": "SNPLP",
+      "point_type": "Line Feature",
+      "category_color": "#92D050",
+      "color": "#8AC438",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Reinforced Concrete Pipe",
+      "code": "SNRCP",
+      "point_type": "Line Feature",
+      "category_color": "#92D050",
+      "color": "#8DD234",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Septic Tank",
+      "code": "SEPTIC",
+      "point_type": "Point",
+      "category_color": "#92D050",
+      "color": "#8ECA46",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Sewer Cleanout",
+      "code": "SNCLNOUT",
+      "point_type": "Point",
+      "category_color": "#92D050",
+      "color": "#91D645",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Sewer Flowline",
+      "code": "SANFL",
+      "point_type": "Breakline",
+      "category_color": "#92D050",
+      "color": "#93CF56",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Sewer Manhole",
+      "code": "SNMH",
+      "point_type": "Point",
+      "category_color": "#92D050",
+      "color": "#96D956",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Sewer Marker",
+      "code": "SNMARK",
+      "point_type": "Point",
+      "category_color": "#92D050",
+      "color": "#99D366",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Sewer Miscellaneous",
+      "code": "SNMISC",
+      "point_type": "Point",
+      "category_color": "#92D050",
+      "color": "#9CDD67",
+      "category_color_name": "bright green",
+      "color_name": "green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Sewer Vault",
+      "code": "SNVAULT",
+      "point_type": "Point",
+      "category_color": "#92D050",
+      "color": "#A0D876",
+      "category_color_name": "bright green",
+      "color_name": "light green"
+    },
+    {
+      "category": "SEWER-SANITARY",
+      "name": "Vitrified Clay Tile",
+      "code": "SNVCP",
+      "point_type": "Line Feature",
+      "category_color": "#92D050",
+      "color": "#A3E177",
+      "category_color_name": "bright green",
+      "color_name": "light green"
+    },
+    {
+      "category": "SIDEWALK",
+      "name": "Back",
+      "code": "BSW",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#CAA0A5",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "SIDEWALK",
+      "name": "Edge",
+      "code": "ESW",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC4C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "SIDEWALK",
+      "name": "Path",
+      "code": "PATH",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC7C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "SIGNS",
+      "name": "Billboard",
+      "code": "SIGNBB",
+      "point_type": "Point",
+      "category_color": "#D9AAD4",
+      "color": "#C685C6",
+      "category_color_name": "soft pink purple",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "SIGNS",
+      "name": "Double Post",
+      "code": "SIGNB",
+      "point_type": "Point",
+      "category_color": "#D9AAD4",
+      "color": "#D38ED0",
+      "category_color_name": "soft pink purple",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "SIGNS",
+      "name": "Interstate Shield",
+      "code": "ISHLD",
+      "point_type": "Point",
+      "category_color": "#D9AAD4",
+      "color": "#D4A4D0",
+      "category_color_name": "soft pink purple",
+      "color_name": "light pink purple"
+    },
+    {
+      "category": "SIGNS",
+      "name": "Single Post",
+      "code": "SIGN",
+      "point_type": "Point",
+      "category_color": "#D9AAD4",
+      "color": "#E0AEDA",
+      "category_color_name": "soft pink purple",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "SIGNS",
+      "name": "State Highway Shield",
+      "code": "SSHLD",
+      "point_type": "Point",
+      "category_color": "#D9AAD4",
+      "color": "#E2C0DC",
+      "category_color_name": "soft pink purple",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "SIGNS",
+      "name": "US Highway Shield",
+      "code": "USHLD",
+      "point_type": "Point",
+      "category_color": "#D9AAD4",
+      "color": "#E5BDDD",
+      "category_color_name": "soft pink purple",
+      "color_name": "pale pink purple"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Catch Basin",
+      "code": "SSCB",
+      "point_type": "Point",
+      "category_color": "#00B050",
+      "color": "#03772C",
+      "category_color_name": "green",
+      "color_name": "dark green"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Channel Earthen",
+      "code": "SSECHNL",
+      "point_type": "Line Feature",
+      "category_color": "#00B050",
+      "color": "#038132",
+      "category_color_name": "green",
+      "color_name": "dark green"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Channel Rigid",
+      "code": "SSRCHNL",
+      "point_type": "Line Feature",
+      "category_color": "#00B050",
+      "color": "#048D3A",
+      "category_color_name": "green",
+      "color_name": "deep green"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Corrugated Steel Pipe",
+      "code": "SSCMP",
+      "point_type": "Line Feature",
+      "category_color": "#00B050",
+      "color": "#049943",
+      "category_color_name": "green",
+      "color_name": "deep green"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Inlet",
+      "code": "SSINLET",
+      "point_type": "Point",
+      "category_color": "#00B050",
+      "color": "#04A64C",
+      "category_color_name": "green",
+      "color_name": "deep green"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Line Other",
+      "code": "SSLINE",
+      "point_type": "Line Feature",
+      "category_color": "#00B050",
+      "color": "#05B255",
+      "category_color_name": "green",
+      "color_name": "deep green"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Manhole",
+      "code": "SSMH",
+      "point_type": "Point",
+      "category_color": "#00B050",
+      "color": "#05BE5F",
+      "category_color_name": "green",
+      "color_name": "deep green"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Reinforced Concrete Pipe",
+      "code": "SSRCP",
+      "point_type": "Line Feature",
+      "category_color": "#00B050",
+      "color": "#05CA6A",
+      "category_color_name": "green",
+      "color_name": "deep teal"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Rigid Plastic Pipe",
+      "code": "SSPLP",
+      "point_type": "Line Feature",
+      "category_color": "#00B050",
+      "color": "#05D675",
+      "category_color_name": "green",
+      "color_name": "teal"
+    },
+    {
+      "category": "SEWER-STORM",
+      "name": "Sewer Vitrified Clay Pipe",
+      "code": "SSVCP",
+      "point_type": "Line Feature",
+      "category_color": "#00B050",
+      "color": "#06E281",
+      "category_color_name": "green",
+      "color_name": "teal"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Bridge",
+      "code": "BRIDGE",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#CAA0A5",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Bridge Abutment",
+      "code": "ABUT",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#CCA4A8",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Bridge Footing",
+      "code": "BRFTNG",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#CEA9AC",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Bridge Pier",
+      "code": "PIER",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#D1ADAF",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Bridge Steel Rail",
+      "code": "BRDGRL",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#D3B1B3",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Bridge Timber Rail",
+      "code": "BRDGRAILT",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#D6B5B7",
+      "category_color_name": "light gray",
+      "color_name": "light red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Canal",
+      "code": "CNLSTR",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#D8BABA",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Concrete Box Culvert",
+      "code": "BOXCULV",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DABEBE",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Concrete Wall",
+      "code": "CONWALL",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DDC2C2",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Headgate",
+      "code": "HDGATE",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC4C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Headwall",
+      "code": "HDWL",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC5C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "High Water Mark",
+      "code": "HIGHWTR",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC5C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Miscellaneous",
+      "code": "STRCMISC",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC5C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Retaining Wall",
+      "code": "RWALL",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC6C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Riprap",
+      "code": "RIPRAP",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC6C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Siphon",
+      "code": "SIPHON",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC6C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Spillway",
+      "code": "SPLWAY",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC7C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "BIRDGE & WALLS",
+      "name": "Wingwall",
+      "code": "WWALL",
+      "point_type": "Breakline",
+      "category_color": "#D1D1D1",
+      "color": "#DEC7C4",
+      "category_color_name": "light gray",
+      "color_name": "pale red"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Booth",
+      "code": "PHONE",
+      "point_type": "Point",
+      "category_color": "#FFC000",
+      "color": "#C27F05",
+      "category_color_name": "amber",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Cable Marker",
+      "code": "TMARK",
+      "point_type": "Point",
+      "category_color": "#FFC000",
+      "color": "#CA8805",
+      "category_color_name": "amber",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Fiber Optics Junction Box",
+      "code": "FOJBX",
+      "point_type": "Point",
+      "category_color": "#FFC000",
+      "color": "#D39105",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Fiber Optics Marker",
+      "code": "FOMARK",
+      "point_type": "Point",
+      "category_color": "#FFC000",
+      "color": "#DB9A06",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Guy Wire",
+      "code": "TGUY",
+      "point_type": "Point",
+      "category_color": "#FFC000",
+      "color": "#E4A406",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Junction Box",
+      "code": "TJBX",
+      "point_type": "Point",
+      "category_color": "#FFC000",
+      "color": "#ECAE06",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Manhole",
+      "code": "MHT",
+      "point_type": "Point",
+      "category_color": "#FFC000",
+      "color": "#F4B806",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Miscellaneous",
+      "code": "TMISC",
+      "point_type": "Point",
+      "category_color": "#FFC000",
+      "color": "#F9C00B",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Overhead Line",
+      "code": "TLINEOH",
+      "point_type": "Line Feature",
+      "category_color": "#FFC000",
+      "color": "#F9C613",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Overhead Line Existing",
+      "code": "TLINEOHEX",
+      "point_type": "Line Feature",
+      "category_color": "#FFC000",
+      "color": "#F9CB1B",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Overhead Line Proposed",
+      "code": "TLINEOHPROP",
+      "point_type": "Line Feature",
+      "category_color": "#FFC000",
+      "color": "#F9D124",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Pole",
+      "code": "TPOLE",
+      "point_type": "Point",
+      "category_color": "#FFC000",
+      "color": "#FAD62C",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Underground Cable",
+      "code": "TLINE",
+      "point_type": "Line Feature",
+      "category_color": "#FFC000",
+      "color": "#FADB35",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEPHONE",
+      "name": "Underground Fiber Optics Cable",
+      "code": "FOLINE",
+      "point_type": "Line Feature",
+      "category_color": "#FFC000",
+      "color": "#FADF3D",
+      "category_color_name": "amber",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEVISION",
+      "name": "Antenna",
+      "code": "TVANT",
+      "point_type": "Point",
+      "category_color": "#FF9900",
+      "color": "#C26305",
+      "category_color_name": "orange",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "TELEVISION",
+      "name": "Cable Junction Box",
+      "code": "JBXTV",
+      "point_type": "Point",
+      "category_color": "#FF9900",
+      "color": "#D06F05",
+      "category_color_name": "orange",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "TELEVISION",
+      "name": "Cable Marker",
+      "code": "TVMARK",
+      "point_type": "Point",
+      "category_color": "#FF9900",
+      "color": "#DD7C06",
+      "category_color_name": "orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TELEVISION",
+      "name": "Cable Overhead",
+      "code": "TVLINEOH",
+      "point_type": "Line Feature",
+      "category_color": "#FF9900",
+      "color": "#EB8906",
+      "category_color_name": "orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TELEVISION",
+      "name": "Cable Overhead Existing",
+      "code": "TVLINEOHEX",
+      "point_type": "Line Feature",
+      "category_color": "#FF9900",
+      "color": "#F99806",
+      "category_color_name": "orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TELEVISION",
+      "name": "Cable Overhead Proposed",
+      "code": "TVLINEOHPROP",
+      "point_type": "Line Feature",
+      "category_color": "#FF9900",
+      "color": "#F9A314",
+      "category_color_name": "orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TELEVISION",
+      "name": "Cable Underground",
+      "code": "TVLINEUG",
+      "point_type": "Line Feature",
+      "category_color": "#FF9900",
+      "color": "#F9AE22",
+      "category_color_name": "orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TELEVISION",
+      "name": "Miscellaneous",
+      "code": "TVMISC",
+      "point_type": "Point",
+      "category_color": "#FF9900",
+      "color": "#FAB92F",
+      "category_color_name": "orange",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TELEVISION",
+      "name": "Satellite Dish",
+      "code": "TVSAT",
+      "point_type": "Point",
+      "category_color": "#FF9900",
+      "color": "#FAC23D",
+      "category_color_name": "orange",
+      "color_name": "yellow"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Bank Top",
+      "code": "BANKTOP",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#7F351E",
+      "category_color_name": "brown orange",
+      "color_name": "deep red"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Breakline",
+      "code": "BRK",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#8E3719",
+      "category_color_name": "brown orange",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Crest",
+      "code": "CREST",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#904021",
+      "category_color_name": "brown orange",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Ditch Bottom",
+      "code": "DBTM",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#A0431C",
+      "category_color_name": "brown orange",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Ditch Top",
+      "code": "DTOP",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#A04C25",
+      "category_color_name": "brown orange",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Existing Toe of Fill",
+      "code": "TOEFILL",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#B1501F",
+      "category_color_name": "brown orange",
+      "color_name": "deep orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Existing Toe of Slope",
+      "code": "TOE",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#B15929",
+      "category_color_name": "brown orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Existing Top of Cut",
+      "code": "TOPCUT",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#C25E22",
+      "category_color_name": "brown orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Flowline",
+      "code": "FL",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#C2672D",
+      "category_color_name": "brown orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Rock-Outcrop",
+      "code": "OUTCRP",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#D46D25",
+      "category_color_name": "brown orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Spot Elevation",
+      "code": "SPOT",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#D07633",
+      "category_color_name": "brown orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TERRAIN",
+      "name": "Stockpile Site",
+      "code": "STKPIL",
+      "point_type": "Breakline",
+      "category_color": "#AF5526",
+      "color": "#DB7E32",
+      "category_color_name": "brown orange",
+      "color_name": "orange"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Control Delineator",
+      "code": "DLNTR",
+      "point_type": "Point",
+      "category_color": "#B8DCAB",
+      "color": "#9FCA85",
+      "category_color_name": "light green",
+      "color_name": "light green"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Control Emergency Vehicle Preemption Conduit",
+      "code": "DEVPC",
+      "point_type": "Line Feature",
+      "category_color": "#B8DCAB",
+      "color": "#A2D487",
+      "category_color_name": "light green",
+      "color_name": "light green"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Control Emergency Vehicle Preemption Detector",
+      "code": "DTEVP",
+      "point_type": "Line Feature",
+      "category_color": "#B8DCAB",
+      "color": "#AAD197",
+      "category_color_name": "light green",
+      "color_name": "light green"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Control Impact Attenuator",
+      "code": "IMPATT",
+      "point_type": "Point",
+      "category_color": "#B8DCAB",
+      "color": "#ADDB9A",
+      "category_color_name": "light green",
+      "color_name": "light green"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Control Parking Meter",
+      "code": "PARKMTR",
+      "point_type": "Point",
+      "category_color": "#B8DCAB",
+      "color": "#B5D9A8",
+      "category_color_name": "light green",
+      "color_name": "light green"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Signal Controller Cabinet",
+      "code": "SCCAB",
+      "point_type": "Point",
+      "category_color": "#B8DCAB",
+      "color": "#BAE1AC",
+      "category_color_name": "light green",
+      "color_name": "light green"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Signal Electrical Conduit",
+      "code": "SC",
+      "point_type": "Point",
+      "category_color": "#B8DCAB",
+      "color": "#C2E0B9",
+      "category_color_name": "light green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Signal Mast Arm Pole",
+      "code": "MARM",
+      "point_type": "Point",
+      "category_color": "#B8DCAB",
+      "color": "#C4E7BB",
+      "category_color_name": "light green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Signal Miscellaneous",
+      "code": "SGNLMSC",
+      "point_type": "Point",
+      "category_color": "#B8DCAB",
+      "color": "#C6E3BF",
+      "category_color_name": "light green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "TRAFFIC",
+      "name": "Signal Traffic Detector Loop",
+      "code": "DTLOP",
+      "point_type": "Line Feature",
+      "category_color": "#B8DCAB",
+      "color": "#C2E7BB",
+      "category_color_name": "light green",
+      "color_name": "pale green"
+    },
+    {
+      "category": "WATER",
+      "name": "Dry Well",
+      "code": "DWELL",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#568C99",
+      "category_color_name": "muted blue",
+      "color_name": "muted teal"
+    },
+    {
+      "category": "WATER",
+      "name": "Fire Hydrant",
+      "code": "FHYD",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#4E93A6",
+      "category_color_name": "muted blue",
+      "color_name": "teal"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Box",
+      "code": "IRBOX",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#59909F",
+      "category_color_name": "muted blue",
+      "color_name": "muted teal"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Headwall",
+      "code": "IRHDWL",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#5197AC",
+      "category_color_name": "muted blue",
+      "color_name": "teal"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Manhole",
+      "code": "IRMHL",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#5D93A4",
+      "category_color_name": "muted blue",
+      "color_name": "muted teal"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Meter",
+      "code": "IRMTR",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#569AB0",
+      "category_color_name": "muted blue",
+      "color_name": "teal"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Minor Structure",
+      "code": "IRSTR",
+      "point_type": "Breakline",
+      "category_color": "#73A0B4",
+      "color": "#6396A8",
+      "category_color_name": "muted blue",
+      "color_name": "muted blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Pipe",
+      "code": "IRPIPE",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#5D9CB3",
+      "category_color_name": "muted blue",
+      "color_name": "blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Pump",
+      "code": "IRPMP",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#6999AB",
+      "category_color_name": "muted blue",
+      "color_name": "muted blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Riser",
+      "code": "IRRSR",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#639FB6",
+      "category_color_name": "muted blue",
+      "color_name": "blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Siphon",
+      "code": "IRSIPH",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#6F9CAE",
+      "category_color_name": "muted blue",
+      "color_name": "muted blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Sprinkler",
+      "code": "SPR",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#69A1B9",
+      "category_color_name": "muted blue",
+      "color_name": "blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Irrigation Valve",
+      "code": "IRVLV",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#759FB2",
+      "category_color_name": "muted blue",
+      "color_name": "muted blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Line",
+      "code": "WLINE",
+      "point_type": "Breakline",
+      "category_color": "#73A0B4",
+      "color": "#70A4BC",
+      "category_color_name": "muted blue",
+      "color_name": "blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Line Marker",
+      "code": "WMARK",
+      "point_type": "Point (no triangulation)",
+      "category_color": "#73A0B4",
+      "color": "#7BA2B5",
+      "category_color_name": "muted blue",
+      "color_name": "muted blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Line Test Riser",
+      "code": "WRSR",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#76A7BF",
+      "category_color_name": "muted blue",
+      "color_name": "blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Meter",
+      "code": "WMTR",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#81A6B9",
+      "category_color_name": "muted blue",
+      "color_name": "muted blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Miscellaneous",
+      "code": "WMISC",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#7CAAC2",
+      "category_color_name": "muted blue",
+      "color_name": "blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Pump House",
+      "code": "PUMPHOUSE",
+      "point_type": "Breakline",
+      "category_color": "#73A0B4",
+      "color": "#87A9BC",
+      "category_color_name": "muted blue",
+      "color_name": "muted blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Spigot",
+      "code": "WSPGOT",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#83ADC5",
+      "category_color_name": "muted blue",
+      "color_name": "light blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Swimming Pool",
+      "code": "SWMPOOL",
+      "point_type": "Breakline",
+      "category_color": "#73A0B4",
+      "color": "#8DACBF",
+      "category_color_name": "muted blue",
+      "color_name": "light blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Tank",
+      "code": "WTANK",
+      "point_type": "Breakline",
+      "category_color": "#73A0B4",
+      "color": "#89B0C8",
+      "category_color_name": "muted blue",
+      "color_name": "light blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Valve",
+      "code": "WVLV",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#93B0C3",
+      "category_color_name": "muted blue",
+      "color_name": "light blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Vault",
+      "code": "WVAULT",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#90B3CB",
+      "category_color_name": "muted blue",
+      "color_name": "light blue"
+    },
+    {
+      "category": "WATER",
+      "name": "Well",
+      "code": "WELL",
+      "point_type": "Point",
+      "category_color": "#73A0B4",
+      "color": "#99B3C6",
+      "category_color_name": "muted blue",
+      "color_name": "light blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Creek",
+      "code": "CREEK",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C0CEDB",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Ditch Flow Line",
+      "code": "DFL",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4D1DE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Edge of Water",
+      "code": "EOWAT",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4D0DE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Flow Line of River",
+      "code": "RIVERFL",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4D0DE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "High Water Line",
+      "code": "HWTRLN",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4CFDE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Lake",
+      "code": "LAKE",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4CFDE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Marshland",
+      "code": "MARSH",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4CEDE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Miscellaneous",
+      "code": "WWMISC",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4CDDE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Ordinary High Water Mark",
+      "code": "HWM",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4CDDE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Pond",
+      "code": "POND",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4CCDE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    },
+    {
+      "category": "WATERWAY",
+      "name": "Wetland",
+      "code": "WETLAND",
+      "point_type": "Breakline",
+      "category_color": "#E7E9EC",
+      "color": "#C4CCDE",
+      "category_color_name": "very light gray",
+      "color_name": "pale blue"
+    }
+  ]
+}

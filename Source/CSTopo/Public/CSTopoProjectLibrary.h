@@ -45,10 +45,13 @@ public:
     static FCSTopoPointCloudCacheManifestDocument BuildCacheManifest(const FCSTopoProjectDocument& Project, const FString& ProjectPath);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo")
+    static bool FindBuiltInCodeStyle(const FString& Code, FCSTopoCodeStyle& OutStyle);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo")
     static FCSTopoPlaneFitResult FitPlaneAtSurveyCoordinate(const TArray<FVector>& Samples, double Northing, double Easting);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo")
-    static FCSTopoShotRecord AddFittedShot(UPARAM(ref) FCSTopoProjectDocument& Project, const FString& Code, double Northing, double Easting, double Elevation, double Residual, const FString& SourceCloudId);
+    static FCSTopoShotRecord AddFittedShot(UPARAM(ref) FCSTopoProjectDocument& Project, const FString& Code, double Northing, double Easting, double Elevation, double Residual, const FString& SourceCloudId, const FString& ControlParameter = TEXT(""), bool bJoinLinework = true);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo")
     static void SplitFigure(UPARAM(ref) FCSTopoProjectDocument& Project, const FString& Code);
@@ -57,6 +60,8 @@ public:
     static void CloseActiveFigure(UPARAM(ref) FCSTopoProjectDocument& Project, const FString& Code);
 
 private:
+    static TArray<FCSTopoCodeStyle> LoadBuiltInCodePalette();
+    static void ApplyBuiltInCodeMetadata(UPARAM(ref) FCSTopoProjectDocument& Project);
     static void ApplyCacheManifest(UPARAM(ref) FCSTopoProjectDocument& Project, const FCSTopoPointCloudCacheManifestDocument& Manifest);
     static FCSTopoCodeStyle FindOrCreateStyle(FCSTopoProjectDocument& Project, const FString& Code);
     static FCSTopoFigureRecord* FindOpenFigure(FCSTopoProjectDocument& Project, const FString& Code);

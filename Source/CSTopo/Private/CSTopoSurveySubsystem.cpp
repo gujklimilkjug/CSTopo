@@ -3,11 +3,13 @@
 #include "CSTopoExporter.h"
 #include "CSTopoPointCloudImport.h"
 #include "CSTopoProjectLibrary.h"
+#include "CompGeom/Delaunay2.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/EngineTypes.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
+#include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
@@ -20,6 +22,7 @@
 #include "Misc/Paths.h"
 #include "Materials/MaterialInterface.h"
 #include "ProceduralMeshComponent.h"
+#include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
 namespace
@@ -326,6 +329,26 @@ FString MeasurementSourceLabel(ECSTopoMeasurementSource Source)
     }
 }
 
+FString DelaunayResultLabel(UE::Geometry::FDelaunay2::EResult Result)
+{
+    switch (Result)
+    {
+    case UE::Geometry::FDelaunay2::EResult::Success:
+        return TEXT("Success");
+    case UE::Geometry::FDelaunay2::EResult::NotComputed:
+        return TEXT("NotComputed");
+    case UE::Geometry::FDelaunay2::EResult::EmptyInput:
+        return TEXT("EmptyInput");
+    case UE::Geometry::FDelaunay2::EResult::Collinear:
+        return TEXT("Collinear");
+    case UE::Geometry::FDelaunay2::EResult::MissingEdges:
+        return TEXT("MissingEdges");
+    case UE::Geometry::FDelaunay2::EResult::Unknown:
+    default:
+        return TEXT("Unknown");
+    }
+}
+
 ECSTopoSurfaceBuildState SurfaceStateFromString(const FString& Value)
 {
     if (Value.Equals(TEXT("Pending"), ESearchCase::IgnoreCase))
@@ -354,12 +377,80 @@ ECSTopoSurfaceBuildState SurfaceStateFromString(const FString& Value)
     }
     return ECSTopoSurfaceBuildState::None;
 }
+
+ECSTopoControlParameterKind ControlParameterKindFromString(const FString& Value)
+{
+    if (Value.Equals(TEXT("Distance"), ESearchCase::IgnoreCase))
+    {
+        return ECSTopoControlParameterKind::Distance;
+    }
+    if (Value.Equals(TEXT("OptionalDistance"), ESearchCase::IgnoreCase))
+    {
+        return ECSTopoControlParameterKind::OptionalDistance;
+    }
+    if (Value.Equals(TEXT("PointNumber"), ESearchCase::IgnoreCase))
+    {
+        return ECSTopoControlParameterKind::PointNumber;
+    }
+    if (Value.Equals(TEXT("DistanceOrPointNumber"), ESearchCase::IgnoreCase))
+    {
+        return ECSTopoControlParameterKind::DistanceOrPointNumber;
+    }
+    return ECSTopoControlParameterKind::None;
+}
+
+ECSTopoControlGeometryKind ControlGeometryKindFromString(const FString& Value)
+{
+    if (Value.Equals(TEXT("StartLine"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::StartLine;
+    if (Value.Equals(TEXT("EndLine"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::EndLine;
+    if (Value.Equals(TEXT("CloseLine"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::CloseLine;
+    if (Value.Equals(TEXT("IgnoreLinework"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::IgnoreLinework;
+    if (Value.Equals(TEXT("JoinToPoint"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::JoinToPoint;
+    if (Value.Equals(TEXT("HorizontalOffset"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::HorizontalOffset;
+    if (Value.Equals(TEXT("VerticalOffset"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::VerticalOffset;
+    if (Value.Equals(TEXT("StartTangentArc"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::StartTangentArc;
+    if (Value.Equals(TEXT("EndTangentArc"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::EndTangentArc;
+    if (Value.Equals(TEXT("StartNonTangentArc"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::StartNonTangentArc;
+    if (Value.Equals(TEXT("EndNonTangentArc"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::EndNonTangentArc;
+    if (Value.Equals(TEXT("StartSmoothCurve"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::StartSmoothCurve;
+    if (Value.Equals(TEXT("EndSmoothCurve"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::EndSmoothCurve;
+    if (Value.Equals(TEXT("Rectangle"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::Rectangle;
+    if (Value.Equals(TEXT("CircleEdge"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::CircleEdge;
+    if (Value.Equals(TEXT("CircleCenter"), ESearchCase::IgnoreCase)) return ECSTopoControlGeometryKind::CircleCenter;
+    return ECSTopoControlGeometryKind::None;
+}
+
+FString NormalizeControlCode(const FString& Code)
+{
+    FString Normalized = Code.TrimStartAndEnd();
+    Normalized.ToUpperInline();
+    return Normalized;
+}
+
+int32 ParsePointNumberParameter(const FString& Parameter)
+{
+    FString Text = Parameter.TrimStartAndEnd().ToUpper();
+    Text.RemoveFromStart(TEXT("P"));
+    return Text.IsNumeric() ? FCString::Atoi(*Text) : INDEX_NONE;
+}
+
+bool ParseNumericParameter(const FString& Parameter, double& OutValue)
+{
+    const FString Text = Parameter.TrimStartAndEnd();
+    return !Text.IsEmpty() && LexTryParseString(OutValue, *Text);
+}
+
+FVector SurveyPointFromShot(const FCSTopoShotRecord& Shot)
+{
+    return FVector(Shot.Northing, Shot.Easting, Shot.Elevation);
+}
 }
 
 void UCSTopoSurveySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);
 
+    LoadControlCodeDefinitions();
     if (ActiveProject.CodePalette.IsEmpty())
     {
         NewProject(TEXT("Untitled CSTopo Project"));
@@ -385,6 +476,7 @@ void UCSTopoSurveySubsystem::NewProject(const FString& ProjectName)
         }
     }
     SurfaceActors.Empty();
+    DestroyUserTinPreview();
 
     ActiveProject = UCSTopoProjectLibrary::CreateDefaultProject(ProjectName);
     CurrentProjectPath.Empty();
@@ -407,6 +499,8 @@ void UCSTopoSurveySubsystem::NewProject(const FString& ProjectName)
     }
     LoadedSurfaces.Empty();
     LastAlignmentReport = FCSTopoAlignmentReport();
+    ClearPendingControlCode();
+    RebuildFigureSegments();
 }
 
 void UCSTopoSurveySubsystem::SetWorkflowState(ECSTopoWorkflowState NewState, const FString& StatusMessage)
@@ -423,6 +517,7 @@ bool UCSTopoSurveySubsystem::IsSurveyReady() const
 void UCSTopoSurveySubsystem::UpdateWorkflow()
 {
     RefreshSurfaceBuildProcess();
+    RefreshUserTinPreviewIfNeeded();
 }
 
 FString UCSTopoSurveySubsystem::GetCurrentProjectPath() const
@@ -437,9 +532,12 @@ bool UCSTopoSurveySubsystem::LoadProject(const FString& FilePath, FString& Error
     const bool bLoaded = UCSTopoProjectLibrary::LoadProjectFromFile(NormalizedFilePath, ActiveProject, ErrorMessage);
     if (bLoaded)
     {
+        DestroyUserTinPreview();
         CurrentProjectPath = NormalizedFilePath;
         RefreshPointCloudSourceStates();
         SyncActivePointCloudFlags();
+        ClearPendingControlCode();
+        RebuildFigureSegments();
         RebuildLoadedPointCloudActors();
     }
     return bLoaded;
@@ -462,7 +560,7 @@ bool UCSTopoSurveySubsystem::SaveProject(const FString& FilePath, FString& Error
     return bSaved;
 }
 
-FCSTopoShotRecord UCSTopoSurveySubsystem::AddFittedShotFromSamples(const FString& Code, double Northing, double Easting, const TArray<FVector>& Samples, const FString& SourceCloudId, bool& bSuccess)
+FCSTopoShotRecord UCSTopoSurveySubsystem::AddFittedShotFromSamples(const FString& Code, double Northing, double Easting, const TArray<FVector>& Samples, const FString& SourceCloudId, bool& bSuccess, const FString& ControlParameter, bool bJoinLinework)
 {
     bSuccess = false;
     FCSTopoShotRecord EmptyShot;
@@ -473,9 +571,18 @@ FCSTopoShotRecord UCSTopoSurveySubsystem::AddFittedShotFromSamples(const FString
         return EmptyShot;
     }
 
-    const FString ShotCode = Code.IsEmpty() ? ActiveProject.ActiveCode : Code;
+    const FString ShotCode = NormalizeCode(Code.IsEmpty() ? ActiveProject.ActiveCode : Code);
+    TArray<FString> ShotTokens;
+    ShotCode.ParseIntoArrayWS(ShotTokens);
+    const FString BaseCode = ShotTokens.IsEmpty() ? ShotCode : ShotTokens[0];
+    FCSTopoCodeStyle ShotStyle;
+    if (!GetCodeStyle(BaseCode, ShotStyle))
+    {
+        return EmptyShot;
+    }
+
     bSuccess = true;
-    return UCSTopoProjectLibrary::AddFittedShot(ActiveProject, ShotCode, Northing, Easting, Fit.Elevation, Fit.Residual, SourceCloudId);
+    return UCSTopoProjectLibrary::AddFittedShot(ActiveProject, ShotCode, Northing, Easting, Fit.Elevation, Fit.Residual, SourceCloudId, ControlParameter, bJoinLinework);
 }
 
 bool UCSTopoSurveySubsystem::ExportCadDeliverables(const FString& CsvPath, const FString& DxfPath, FString& ErrorMessage) const
@@ -508,7 +615,7 @@ void UCSTopoSurveySubsystem::SetActiveCode(const FString& Code)
         return Style.Code.Equals(NormalizedCode, ESearchCase::IgnoreCase);
     }))
     {
-        ActiveProject.CodePalette.Add(MakeDefaultCodeStyle(NormalizedCode));
+        return;
     }
 
     ActiveProject.ActiveCode = NormalizedCode;
@@ -929,6 +1036,137 @@ bool UCSTopoSurveySubsystem::SetSurfaceVisible(const FString& SourceId, bool bVi
 
     Source->bSurfacePrimary = bVisible;
     RefreshSurfacePresentation(*Source);
+    return true;
+}
+
+bool UCSTopoSurveySubsystem::ToggleActiveSourceTinRenderVisible(FString& StatusMessage)
+{
+    const FCSTopoPointCloudSource* Source = FindPointCloud(ActiveProject.ActivePointCloudId);
+    if (Source == nullptr)
+    {
+        StatusMessage = TEXT("No active point cloud is selected.");
+        return false;
+    }
+    return SetActiveSourceTinRenderVisible(!Source->bSurfaceRenderVisible, StatusMessage);
+}
+
+bool UCSTopoSurveySubsystem::SetActiveSourceTinRenderVisible(bool bVisible, FString& StatusMessage)
+{
+    FCSTopoPointCloudSource* Source = FindPointCloudMutable(ActiveProject.ActivePointCloudId);
+    if (Source == nullptr)
+    {
+        StatusMessage = TEXT("No active point cloud is selected.");
+        return false;
+    }
+
+    Source->bSurfaceRenderVisible = bVisible;
+    RefreshSurfacePresentation(*Source);
+    StatusMessage = bVisible ? TEXT("Source TIN visible.") : TEXT("Source TIN hidden; walk collision remains active.");
+    return true;
+}
+
+bool UCSTopoSurveySubsystem::ToggleUserTinVisible(FString& StatusMessage)
+{
+    return SetUserTinVisible(!bUserTinVisible, StatusMessage);
+}
+
+bool UCSTopoSurveySubsystem::SetUserTinVisible(bool bVisible, FString& StatusMessage)
+{
+    bUserTinVisible = bVisible;
+    if (!bUserTinVisible)
+    {
+        if (UserTinMeshComponent != nullptr)
+        {
+            UserTinMeshComponent->ClearAllMeshSections();
+            UserTinMeshComponent->SetVisibility(false, true);
+            UserTinMeshComponent->SetHiddenInGame(true, true);
+        }
+        if (UserTinActor != nullptr)
+        {
+            UserTinActor->SetActorHiddenInGame(true);
+        }
+        UserTinStatusLine = TEXT("User TIN hidden.");
+        StatusMessage = UserTinStatusLine;
+        return true;
+    }
+
+    bUserTinDirty = true;
+    return RebuildUserTinPreview(StatusMessage);
+}
+
+FString UCSTopoSurveySubsystem::GetUserTinStatusLine() const
+{
+    return UserTinStatusLine;
+}
+
+TArray<FCSTopoControlCodeDefinition> UCSTopoSurveySubsystem::GetControlCodeDefinitions() const
+{
+    return ControlCodeDefinitions;
+}
+
+bool UCSTopoSurveySubsystem::SetPendingControlCode(const FString& ControlCode, const FString& Parameter, FString& StatusMessage)
+{
+    const FString NormalizedControl = NormalizeControlCode(ControlCode);
+    if (NormalizedControl.IsEmpty())
+    {
+        ClearPendingControlCode();
+        StatusMessage = TEXT("Control code cleared.");
+        return true;
+    }
+
+    if (FindControlCodeDefinition(NormalizedControl) == nullptr)
+    {
+        StatusMessage = FString::Printf(TEXT("%s is not in the CSTopo control-code list."), *NormalizedControl);
+        return false;
+    }
+
+    const FString NormalizedParameter = Parameter.TrimStartAndEnd().ToUpper();
+    if (!ValidateControlParameter(NormalizedControl, NormalizedParameter, StatusMessage))
+    {
+        return false;
+    }
+
+    PendingControlCode = NormalizedControl;
+    PendingControlParameter = NormalizedParameter;
+    StatusMessage = PendingControlParameter.IsEmpty()
+        ? FString::Printf(TEXT("%s will apply to the next measurement."), *PendingControlCode)
+        : FString::Printf(TEXT("%s %s will apply to the next measurement."), *PendingControlCode, *PendingControlParameter);
+    return true;
+}
+
+void UCSTopoSurveySubsystem::ClearPendingControlCode()
+{
+    PendingControlCode.Empty();
+    PendingControlParameter.Empty();
+}
+
+bool UCSTopoSurveySubsystem::UndoLastMeasurement(FString& StatusMessage)
+{
+    if (ActiveProject.Shots.IsEmpty())
+    {
+        StatusMessage = TEXT("No measurements to remove.");
+        return false;
+    }
+
+    const FCSTopoShotRecord RemovedShot = ActiveProject.Shots.Last();
+    ActiveProject.Shots.Pop();
+    for (FCSTopoFigureRecord& Figure : ActiveProject.Figures)
+    {
+        Figure.PointNumbers.Remove(RemovedShot.PointNumber);
+    }
+    ActiveProject.Figures.RemoveAll([](const FCSTopoFigureRecord& Figure)
+    {
+        return Figure.PointNumbers.IsEmpty();
+    });
+    int32 MaxPointNumber = 0;
+    for (const FCSTopoShotRecord& Shot : ActiveProject.Shots)
+    {
+        MaxPointNumber = FMath::Max(MaxPointNumber, Shot.PointNumber);
+    }
+    ActiveProject.NextPointNumber = MaxPointNumber + 1;
+    RebuildFigureSegments();
+    bUserTinDirty = true;
+    StatusMessage = FString::Printf(TEXT("Removed shot %d %s."), RemovedShot.PointNumber, *RemovedShot.Code);
     return true;
 }
 
@@ -1942,6 +2180,18 @@ bool UCSTopoSurveySubsystem::GetActiveSurveyBounds(FVector2D& OutMinSurveyNe, FV
     return true;
 }
 
+bool UCSTopoSurveySubsystem::SurveyPointToRenderLocation(const FVector& SurveyPoint, FVector& RenderLocation) const
+{
+    const FCSTopoPointCloudSource* Source = FindPointCloud(ActiveProject.ActivePointCloudId);
+    if (Source == nullptr)
+    {
+        return false;
+    }
+
+    RenderLocation = SourceToRenderPoint(*Source, FVector(SurveyPoint.Y, SurveyPoint.X, SurveyPoint.Z));
+    return true;
+}
+
 void UCSTopoSurveySubsystem::UpdateSurveyMapPose(const FVector& CameraRenderLocation, const FVector& ViewDirection)
 {
     LastSurveyMapRenderLocation = CameraRenderLocation;
@@ -2159,7 +2409,8 @@ bool UCSTopoSurveySubsystem::PreviewMeasurementAtView(const FVector& ViewOrigin,
 
 void UCSTopoSurveySubsystem::RefreshSurfacePresentation(FCSTopoPointCloudSource& Source)
 {
-    const bool bShowSurfaceActor = Source.bSurfacePrimary && Source.SurfaceBuildState == ECSTopoSurfaceBuildState::Ready;
+    const bool bSurfaceReadyPrimary = Source.bSurfacePrimary && Source.SurfaceBuildState == ECSTopoSurfaceBuildState::Ready;
+    const bool bShowSurfaceActor = bSurfaceReadyPrimary && Source.bSurfaceRenderVisible;
     if (TObjectPtr<AActor>* SurfaceActor = SurfaceActors.Find(Source.SourceId))
     {
         if (SurfaceActor->Get() != nullptr)
@@ -2186,7 +2437,7 @@ void UCSTopoSurveySubsystem::RefreshSurfacePresentation(FCSTopoPointCloudSource&
 
         if (Surface->CollisionProxyComponent != nullptr)
         {
-            const bool bEnableProxyCollision = bShowSurfaceActor && !Surface->RuntimeVisibleTileIds.IsEmpty();
+            const bool bEnableProxyCollision = bSurfaceReadyPrimary && !Surface->RuntimeVisibleTileIds.IsEmpty();
             Surface->CollisionProxyComponent->SetVisibility(false, true);
             Surface->CollisionProxyComponent->SetHiddenInGame(true, true);
             Surface->CollisionProxyComponent->SetCollisionEnabled(bEnableProxyCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
@@ -2197,7 +2448,7 @@ void UCSTopoSurveySubsystem::RefreshSurfacePresentation(FCSTopoPointCloudSource&
     {
         if (CloudActor->Get() != nullptr)
         {
-            const bool bShowCloud = Source.bVisible && (!Source.bSurfacePrimary || Source.bCloudOverlayVisible || Source.SurfaceBuildState != ECSTopoSurfaceBuildState::Ready);
+            const bool bShowCloud = Source.bVisible && (!Source.bSurfacePrimary || !Source.bSurfaceRenderVisible || Source.bCloudOverlayVisible || Source.SurfaceBuildState != ECSTopoSurfaceBuildState::Ready);
             CloudActor->Get()->SetActorHiddenInGame(!bShowCloud);
         }
     }
@@ -2582,11 +2833,18 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
         return false;
     }
 
+    const FString BaseCode = NormalizeCode(ActiveProject.ActiveCode);
+    const FString MeasurementCode = BuildNextMeasurementCode();
+    const FString MeasurementControlCode = PendingControlCode;
+    const FString MeasurementControlParameter = PendingControlParameter;
+    const bool bStartsNewLine = MeasurementControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase);
+    const bool bJoinLinework = !MeasurementControlCode.Equals(TEXT("IG"), ESearchCase::IgnoreCase);
+
     if (Preview.bUsesDerivedSurface)
     {
         const FVector ShotNez = Preview.SurveyNez;
         FCSTopoShotRecord ExistingShot;
-        if (IsDuplicateAgainstOpenFigure(ShotNez, ActiveProject.ActiveCode, 0.02, ExistingShot))
+        if (bJoinLinework && !bStartsNewLine && IsDuplicateAgainstOpenFigure(ShotNez, BaseCode, 0.02, ExistingShot))
         {
             ErrorMessage = FString::Printf(
                 TEXT("Reticle is still on the previous shot location. Move the reticle to continue linework. Last shot: %d %s"),
@@ -2595,7 +2853,8 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
             return false;
         }
 
-        Shot = UCSTopoProjectLibrary::AddFittedShot(ActiveProject, ActiveProject.ActiveCode, ShotNez.X, ShotNez.Y, ShotNez.Z, 0.0, Source->SourceId);
+        ApplyControlBeforeShot(BaseCode, MeasurementControlCode);
+        Shot = UCSTopoProjectLibrary::AddFittedShot(ActiveProject, MeasurementCode, ShotNez.X, ShotNez.Y, ShotNez.Z, 0.0, Source->SourceId, MeasurementControlParameter, bJoinLinework);
         RenderLocation = Preview.RenderLocation;
 
         if (FCSTopoShotRecord* StoredShot = ActiveProject.Shots.FindByPredicate([PointNumber = Shot.PointNumber](const FCSTopoShotRecord& Candidate)
@@ -2624,6 +2883,7 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
             Shot = *StoredShot;
         }
 
+        ApplyControlAfterShot(Shot);
         ErrorMessage = FString::Printf(
             TEXT("Shot %d %s N %.3f E %.3f Z %.3f %s (DerivedSurface %s)"),
             Shot.PointNumber,
@@ -2680,7 +2940,7 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
 
     const FVector ShotNez = RenderToSurveyNez(RenderHit);
     FCSTopoShotRecord ExistingShot;
-    if (IsDuplicateAgainstOpenFigure(ShotNez, ActiveProject.ActiveCode, 0.02, ExistingShot))
+    if (bJoinLinework && !bStartsNewLine && IsDuplicateAgainstOpenFigure(ShotNez, BaseCode, 0.02, ExistingShot))
     {
         ErrorMessage = FString::Printf(
             TEXT("Reticle is still on the previous shot location. Move the reticle to continue linework. Last shot: %d %s"),
@@ -2691,10 +2951,11 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
 
     bool bShotAdded = false;
     FString ResolvedFitType = TEXT("NearestPoint");
+    ApplyControlBeforeShot(BaseCode, MeasurementControlCode);
     if (Neighborhood.Num() >= 3)
     {
         bool bFitSucceeded = false;
-        Shot = AddFittedShotFromSamples(ActiveProject.ActiveCode, ShotNez.X, ShotNez.Y, SurveySamples, Source->SourceId, bFitSucceeded);
+        Shot = AddFittedShotFromSamples(MeasurementCode, ShotNez.X, ShotNez.Y, SurveySamples, Source->SourceId, bFitSucceeded, MeasurementControlParameter, bJoinLinework);
         if (bFitSucceeded)
         {
             bShotAdded = true;
@@ -2704,7 +2965,7 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
 
     if (!bShotAdded)
     {
-        Shot = UCSTopoProjectLibrary::AddFittedShot(ActiveProject, ActiveProject.ActiveCode, ShotNez.X, ShotNez.Y, ShotNez.Z, 0.0, Source->SourceId);
+        Shot = UCSTopoProjectLibrary::AddFittedShot(ActiveProject, MeasurementCode, ShotNez.X, ShotNez.Y, ShotNez.Z, 0.0, Source->SourceId, MeasurementControlParameter, bJoinLinework);
         ResolvedFitType = TEXT("NearestPoint");
     }
 
@@ -2732,6 +2993,7 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
         Shot = *StoredShot;
     }
 
+    ApplyControlAfterShot(Shot);
     ErrorMessage = FString::Printf(
         TEXT("Shot %d %s N %.3f E %.3f Z %.3f %s (%s, %d samples)"),
         Shot.PointNumber,
@@ -3082,6 +3344,319 @@ void UCSTopoSurveySubsystem::RefreshRuntimeWindowProcess()
     RuntimeWindowProcessOutputPath.Empty();
 }
 
+void UCSTopoSurveySubsystem::RefreshUserTinPreviewIfNeeded()
+{
+    if (!bUserTinVisible)
+    {
+        return;
+    }
+
+    if (bUserTinDirty
+        || LastUserTinShotCount != ActiveProject.Shots.Num()
+        || LastUserTinFigureCount != ActiveProject.Figures.Num())
+    {
+        FString StatusMessage;
+        RebuildUserTinPreview(StatusMessage);
+    }
+}
+
+void UCSTopoSurveySubsystem::DestroyUserTinPreview()
+{
+    if (UserTinActor != nullptr)
+    {
+        UserTinActor->Destroy();
+    }
+    UserTinActor = nullptr;
+    UserTinMeshComponent = nullptr;
+    bUserTinVisible = false;
+    bUserTinDirty = true;
+    LastUserTinShotCount = INDEX_NONE;
+    LastUserTinFigureCount = INDEX_NONE;
+    UserTinStatusLine = TEXT("User TIN hidden.");
+}
+
+bool UCSTopoSurveySubsystem::RebuildUserTinPreview(FString& StatusMessage)
+{
+    LastUserTinShotCount = ActiveProject.Shots.Num();
+    LastUserTinFigureCount = ActiveProject.Figures.Num();
+    bUserTinDirty = false;
+
+    const FCSTopoPointCloudSource* Source = FindPointCloud(ActiveProject.ActivePointCloudId);
+    if (Source == nullptr)
+    {
+        UserTinStatusLine = TEXT("User TIN needs an active point cloud.");
+        StatusMessage = UserTinStatusLine;
+        return false;
+    }
+
+    UWorld* World = GetWorld();
+    if (World == nullptr)
+    {
+        UserTinStatusLine = TEXT("World is not available for User TIN rendering.");
+        StatusMessage = UserTinStatusLine;
+        return false;
+    }
+
+    TArray<FVector> RenderVertices;
+    TArray<FVector2d> TinVertices;
+    TArray<FLinearColor> Colors;
+    TMap<int32, int32> VertexIndexByPointNumber;
+    int32 BreaklineVertexCount = 0;
+
+    for (const FCSTopoShotRecord& Shot : ActiveProject.Shots)
+    {
+        if (!Shot.SourceCloudId.IsEmpty() && Shot.SourceCloudId != Source->SourceId)
+        {
+            continue;
+        }
+
+        const FString BaseCode = Shot.BaseCode.IsEmpty() ? Shot.Code : Shot.BaseCode;
+        FCSTopoCodeStyle Style;
+        if (!GetCodeStyle(BaseCode, Style))
+        {
+            continue;
+        }
+
+        const FString PointType = Style.PointType;
+        if (!DoesCSTopoPointTypeContributeToUserTin(PointType))
+        {
+            continue;
+        }
+
+        const int32 VertexIndex = RenderVertices.Num();
+        VertexIndexByPointNumber.Add(Shot.PointNumber, VertexIndex);
+        RenderVertices.Add(SourceToRenderPoint(*Source, FVector(Shot.Easting, Shot.Northing, Shot.Elevation)));
+        TinVertices.Add(FVector2d(Shot.Easting, Shot.Northing));
+        Colors.Add(DoesCSTopoPointTypeCreateTinBreakline(PointType)
+            ? FLinearColor(1.0f, 0.52f, 0.08f, 1.0f)
+            : FLinearColor(0.94f, 0.86f, 0.28f, 1.0f));
+        if (DoesCSTopoPointTypeCreateTinBreakline(PointType))
+        {
+            ++BreaklineVertexCount;
+        }
+    }
+
+    if (RenderVertices.Num() < 3)
+    {
+        if (UserTinMeshComponent != nullptr)
+        {
+            UserTinMeshComponent->ClearAllMeshSections();
+        }
+        UserTinStatusLine = FString::Printf(TEXT("User TIN needs at least 3 triangulatable shots. Current: %d."), RenderVertices.Num());
+        StatusMessage = UserTinStatusLine;
+        return false;
+    }
+
+    TArray<UE::Geometry::FIndex2i> BreaklineEdges;
+    TSet<uint64> SeenBreaklineEdges;
+    int32 SkippedBreaklineSegments = 0;
+    auto AddBreaklineEdge = [&BreaklineEdges, &SeenBreaklineEdges, &SkippedBreaklineSegments](int32 A, int32 B)
+    {
+        if (A == B)
+        {
+            ++SkippedBreaklineSegments;
+            return;
+        }
+        const uint32 Low = static_cast<uint32>(FMath::Min(A, B));
+        const uint32 High = static_cast<uint32>(FMath::Max(A, B));
+        const uint64 Key = (static_cast<uint64>(Low) << 32) | static_cast<uint64>(High);
+        if (SeenBreaklineEdges.Contains(Key))
+        {
+            return;
+        }
+        SeenBreaklineEdges.Add(Key);
+        BreaklineEdges.Add(UE::Geometry::FIndex2i(A, B));
+    };
+
+    for (const FCSTopoFigureRecord& Figure : ActiveProject.Figures)
+    {
+        FString PointType = Figure.Style.PointType;
+        if (PointType.IsEmpty())
+        {
+            FCSTopoCodeStyle Style;
+            if (GetCodeStyle(Figure.Code, Style))
+            {
+                PointType = Style.PointType;
+            }
+        }
+        if (!DoesCSTopoPointTypeCreateTinBreakline(PointType) || Figure.PointNumbers.Num() < 2)
+        {
+            continue;
+        }
+
+        for (int32 Index = 0; Index + 1 < Figure.PointNumbers.Num(); ++Index)
+        {
+            const int32* A = VertexIndexByPointNumber.Find(Figure.PointNumbers[Index]);
+            const int32* B = VertexIndexByPointNumber.Find(Figure.PointNumbers[Index + 1]);
+            if (A == nullptr || B == nullptr)
+            {
+                ++SkippedBreaklineSegments;
+                continue;
+            }
+            AddBreaklineEdge(*A, *B);
+        }
+
+        if (Figure.bLoopClosed)
+        {
+            const int32* A = VertexIndexByPointNumber.Find(Figure.PointNumbers.Last());
+            const int32* B = VertexIndexByPointNumber.Find(Figure.PointNumbers[0]);
+            if (A == nullptr || B == nullptr)
+            {
+                ++SkippedBreaklineSegments;
+            }
+            else
+            {
+                AddBreaklineEdge(*A, *B);
+            }
+        }
+    }
+
+    TArray<UE::Geometry::FIndex3i> TinTriangles;
+    FString WarningMessage;
+    bool bUsedBreaklineConstraints = false;
+    if (!BreaklineEdges.IsEmpty())
+    {
+        UE::Geometry::FDelaunay2 Delaunay;
+        Delaunay.bAutomaticallyFixEdgesToDuplicateVertices = true;
+        Delaunay.bValidateEdges = true;
+        if (Delaunay.Triangulate(TinVertices, BreaklineEdges))
+        {
+            TinTriangles = Delaunay.GetTriangles();
+            bUsedBreaklineConstraints = true;
+            if (!Delaunay.HasEdges(BreaklineEdges))
+            {
+                WarningMessage = TEXT("Warning: some breakline constraints were not preserved.");
+            }
+        }
+        else
+        {
+            WarningMessage = FString::Printf(TEXT("Warning: breakline constraints were not fully applied (%s). Rendering best-effort TIN."), *DelaunayResultLabel(Delaunay.GetResult()));
+        }
+    }
+
+    if (TinTriangles.IsEmpty())
+    {
+        UE::Geometry::FDelaunay2 Delaunay;
+        if (!Delaunay.Triangulate(TinVertices))
+        {
+            UserTinStatusLine = FString::Printf(TEXT("User TIN failed: %s."), *DelaunayResultLabel(Delaunay.GetResult()));
+            StatusMessage = UserTinStatusLine;
+            return false;
+        }
+        TinTriangles = Delaunay.GetTriangles();
+    }
+
+    TArray<int32> RenderTriangles;
+    TArray<FVector> Normals;
+    TArray<FVector2D> UVs;
+    TArray<FProcMeshTangent> Tangents;
+    RenderTriangles.Reserve(TinTriangles.Num() * 3);
+    Normals.Init(FVector::ZeroVector, RenderVertices.Num());
+    UVs.Init(FVector2D::ZeroVector, RenderVertices.Num());
+    Tangents.Init(FProcMeshTangent(1.0f, 0.0f, 0.0f), RenderVertices.Num());
+
+    for (const UE::Geometry::FIndex3i& Triangle : TinTriangles)
+    {
+        if (!RenderVertices.IsValidIndex(Triangle.A)
+            || !RenderVertices.IsValidIndex(Triangle.B)
+            || !RenderVertices.IsValidIndex(Triangle.C))
+        {
+            continue;
+        }
+
+        const FVector& A = RenderVertices[Triangle.A];
+        const FVector& B = RenderVertices[Triangle.B];
+        const FVector& C = RenderVertices[Triangle.C];
+        FVector FaceNormal = FVector::CrossProduct(B - A, C - A);
+        if (!FaceNormal.Normalize())
+        {
+            continue;
+        }
+        if (FaceNormal.Z < 0.0f)
+        {
+            FaceNormal *= -1.0f;
+        }
+        Normals[Triangle.A] += FaceNormal;
+        Normals[Triangle.B] += FaceNormal;
+        Normals[Triangle.C] += FaceNormal;
+        RenderTriangles.Add(Triangle.A);
+        RenderTriangles.Add(Triangle.C);
+        RenderTriangles.Add(Triangle.B);
+    }
+
+    if (RenderTriangles.IsEmpty())
+    {
+        UserTinStatusLine = TEXT("User TIN produced no renderable triangles.");
+        StatusMessage = UserTinStatusLine;
+        return false;
+    }
+
+    for (FVector& Normal : Normals)
+    {
+        if (!Normal.Normalize())
+        {
+            Normal = FVector::UpVector;
+        }
+    }
+
+    if (UserTinActor == nullptr)
+    {
+        UserTinActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator);
+        if (UserTinActor == nullptr)
+        {
+            UserTinStatusLine = TEXT("Failed to spawn User TIN actor.");
+            StatusMessage = UserTinStatusLine;
+            return false;
+        }
+
+        USceneComponent* RootComponent = NewObject<USceneComponent>(UserTinActor, TEXT("Root"));
+        UserTinActor->SetRootComponent(RootComponent);
+        RootComponent->RegisterComponent();
+#if WITH_EDITOR
+        UserTinActor->SetActorLabel(TEXT("CSTopoUserTIN"));
+#endif
+    }
+
+    if (UserTinMeshComponent == nullptr)
+    {
+        UserTinMeshComponent = NewObject<UProceduralMeshComponent>(UserTinActor, TEXT("UserTinPreview"));
+        UserTinMeshComponent->SetupAttachment(UserTinActor->GetRootComponent());
+        UserTinMeshComponent->RegisterComponent();
+        UserTinMeshComponent->SetMobility(EComponentMobility::Movable);
+        UserTinMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        UserTinMeshComponent->SetCollisionResponseToAllChannels(ECR_Ignore);
+        UserTinMeshComponent->bUseAsyncCooking = false;
+    }
+
+    UserTinActor->SetActorHiddenInGame(false);
+    UserTinMeshComponent->ClearAllMeshSections();
+    UserTinMeshComponent->CreateMeshSection_LinearColor(0, RenderVertices, RenderTriangles, Normals, UVs, Colors, Tangents, false);
+    static UMaterialInterface* VertexColorMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/VertexColorMaterial.VertexColorMaterial"));
+    UserTinMeshComponent->SetMaterial(0, VertexColorMaterial != nullptr ? VertexColorMaterial : UMaterial::GetDefaultMaterial(MD_Surface));
+    UserTinMeshComponent->SetCastShadow(false);
+    UserTinMeshComponent->bCastDynamicShadow = false;
+    UserTinMeshComponent->SetVisibility(true, true);
+    UserTinMeshComponent->SetHiddenInGame(false, true);
+
+    if (SkippedBreaklineSegments > 0)
+    {
+        const FString SegmentWarning = FString::Printf(TEXT("%d breakline segment(s) could not be used."), SkippedBreaklineSegments);
+        WarningMessage = WarningMessage.IsEmpty() ? FString::Printf(TEXT("Warning: %s"), *SegmentWarning) : FString::Printf(TEXT("%s %s"), *WarningMessage, *SegmentWarning);
+    }
+
+    const FString WarningSuffix = WarningMessage.IsEmpty() ? TEXT(".") : FString::Printf(TEXT(". %s"), *WarningMessage);
+    UserTinStatusLine = FString::Printf(
+        TEXT("User TIN visible: %d point(s), %d breakline vertex/vertices, %d breakline segment(s), %d triangle(s)%s%s"),
+        RenderVertices.Num(),
+        BreaklineVertexCount,
+        BreaklineEdges.Num(),
+        RenderTriangles.Num() / 3,
+        bUsedBreaklineConstraints ? TEXT(" | constrained") : TEXT(""),
+        *WarningSuffix);
+    StatusMessage = UserTinStatusLine;
+    return true;
+}
+
 bool UCSTopoSurveySubsystem::StartRuntimeWindowUpdate(FCSTopoPointCloudSource& Source, const FVector& CameraSourcePoint, FString& ErrorMessage)
 {
     FString PdalPath;
@@ -3320,21 +3895,339 @@ void UCSTopoSurveySubsystem::RefreshPointCloudViewMode(FCSTopoPointCloudSource& 
     RefreshSurfacePresentation(Source);
 }
 
+void UCSTopoSurveySubsystem::LoadControlCodeDefinitions()
+{
+    ControlCodeDefinitions.Reset();
+    const FString ControlListPath = FPaths::Combine(FPaths::ProjectConfigDir(), TEXT("CSTopoControlCodeList.json"));
+    FString Json;
+    if (!FFileHelper::LoadFileToString(Json, *ControlListPath))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("CSTopo Control Code List not found: %s"), *ControlListPath);
+        return;
+    }
+
+    TSharedPtr<FJsonObject> RootObject;
+    const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
+    if (!FJsonSerializer::Deserialize(Reader, RootObject) || !RootObject.IsValid())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("CSTopo Control Code List could not be parsed: %s"), *ControlListPath);
+        return;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* ControlValues = nullptr;
+    if (!RootObject->TryGetArrayField(TEXT("controls"), ControlValues))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("CSTopo Control Code List is missing the controls array: %s"), *ControlListPath);
+        return;
+    }
+
+    for (const TSharedPtr<FJsonValue>& ControlValue : *ControlValues)
+    {
+        const TSharedPtr<FJsonObject>* ControlObject = nullptr;
+        if (!ControlValue.IsValid() || !ControlValue->TryGetObject(ControlObject) || ControlObject == nullptr || !ControlObject->IsValid())
+        {
+            continue;
+        }
+
+        FString Code;
+        if (!(*ControlObject)->TryGetStringField(TEXT("code"), Code) || Code.IsEmpty())
+        {
+            continue;
+        }
+
+        FCSTopoControlCodeDefinition Definition;
+        Definition.Code = NormalizeControlCode(Code);
+        (*ControlObject)->TryGetStringField(TEXT("name"), Definition.Name);
+        (*ControlObject)->TryGetStringField(TEXT("action"), Definition.Action);
+        FString ParameterKind;
+        FString GeometryKind;
+        (*ControlObject)->TryGetStringField(TEXT("parameter_kind"), ParameterKind);
+        (*ControlObject)->TryGetStringField(TEXT("geometry_kind"), GeometryKind);
+        Definition.ParameterKind = ControlParameterKindFromString(ParameterKind);
+        Definition.GeometryKind = ControlGeometryKindFromString(GeometryKind);
+        ControlCodeDefinitions.Add(Definition);
+    }
+}
+
+const FCSTopoControlCodeDefinition* UCSTopoSurveySubsystem::FindControlCodeDefinition(const FString& ControlCode) const
+{
+    const FString NormalizedControl = NormalizeControlCode(ControlCode);
+    return ControlCodeDefinitions.FindByPredicate([&NormalizedControl](const FCSTopoControlCodeDefinition& Definition)
+    {
+        return Definition.Code.Equals(NormalizedControl, ESearchCase::IgnoreCase);
+    });
+}
+
+bool UCSTopoSurveySubsystem::ValidateControlParameter(const FString& ControlCode, const FString& Parameter, FString& StatusMessage) const
+{
+    const FCSTopoControlCodeDefinition* Definition = FindControlCodeDefinition(ControlCode);
+    if (Definition == nullptr)
+    {
+        StatusMessage = FString::Printf(TEXT("%s is not in the CSTopo control-code list."), *ControlCode);
+        return false;
+    }
+
+    const FString NormalizedParameter = Parameter.TrimStartAndEnd();
+    double NumericValue = 0.0;
+    switch (Definition->ParameterKind)
+    {
+    case ECSTopoControlParameterKind::Distance:
+        if (!ParseNumericParameter(NormalizedParameter, NumericValue))
+        {
+            StatusMessage = FString::Printf(TEXT("%s needs a numeric distance."), *ControlCode);
+            return false;
+        }
+        break;
+    case ECSTopoControlParameterKind::PointNumber:
+        if (ParsePointNumberParameter(Parameter) == INDEX_NONE)
+        {
+            StatusMessage = FString::Printf(TEXT("%s needs a point number."), *ControlCode);
+            return false;
+        }
+        break;
+    case ECSTopoControlParameterKind::DistanceOrPointNumber:
+        if (!ParseNumericParameter(NormalizedParameter, NumericValue) && ParsePointNumberParameter(NormalizedParameter) == INDEX_NONE)
+        {
+            StatusMessage = FString::Printf(TEXT("%s needs a distance or P<pointNumber>."), *ControlCode);
+            return false;
+        }
+        break;
+    case ECSTopoControlParameterKind::OptionalDistance:
+        if (!NormalizedParameter.IsEmpty() && !ParseNumericParameter(NormalizedParameter, NumericValue))
+        {
+            StatusMessage = FString::Printf(TEXT("%s needs a numeric radius when a parameter is supplied."), *ControlCode);
+            return false;
+        }
+        break;
+    case ECSTopoControlParameterKind::None:
+    default:
+        break;
+    }
+
+    return true;
+}
+
+FString UCSTopoSurveySubsystem::BuildNextMeasurementCode() const
+{
+    const FString BaseCode = NormalizeControlCode(ActiveProject.ActiveCode);
+    return PendingControlCode.IsEmpty() ? BaseCode : FString::Printf(TEXT("%s %s"), *BaseCode, *PendingControlCode);
+}
+
+void UCSTopoSurveySubsystem::ApplyControlBeforeShot(const FString& BaseCode, const FString& ControlCode)
+{
+    if (ControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase))
+    {
+        UCSTopoProjectLibrary::SplitFigure(ActiveProject, BaseCode);
+    }
+}
+
+void UCSTopoSurveySubsystem::ApplyControlAfterShot(const FCSTopoShotRecord& Shot)
+{
+    if (Shot.ControlCode.Equals(TEXT("END"), ESearchCase::IgnoreCase))
+    {
+        UCSTopoProjectLibrary::SplitFigure(ActiveProject, Shot.BaseCode);
+    }
+    else if (Shot.ControlCode.Equals(TEXT("CLS"), ESearchCase::IgnoreCase))
+    {
+        UCSTopoProjectLibrary::CloseActiveFigure(ActiveProject, Shot.BaseCode);
+    }
+
+    ClearPendingControlCode();
+    RebuildFigureSegments();
+    bUserTinDirty = true;
+}
+
+void UCSTopoSurveySubsystem::RebuildFigureSegments()
+{
+    ActiveProject.FigureSegments.Reset();
+    TMap<int32, FCSTopoShotRecord> ShotByNumber;
+    TMap<FString, TArray<FCSTopoShotRecord>> ShotsByBaseCode;
+    for (const FCSTopoShotRecord& Shot : ActiveProject.Shots)
+    {
+        ShotByNumber.Add(Shot.PointNumber, Shot);
+        const FString BaseCode = Shot.BaseCode.IsEmpty() ? Shot.Code : Shot.BaseCode;
+        ShotsByBaseCode.FindOrAdd(BaseCode).Add(Shot);
+    }
+
+    auto AddSegment = [this](ECSTopoFigureSegmentKind Kind, const FString& Code, const TArray<int32>& PointNumbers, const TArray<FVector>& SurveyPoints, const FString& ControlCode, const FString& ControlParameter, int32 CreatedByPointNumber)
+    {
+        if (SurveyPoints.Num() < 2)
+        {
+            return;
+        }
+        FCSTopoCodeStyle Style;
+        GetCodeStyle(Code, Style);
+        FCSTopoFigureSegmentRecord Segment;
+        Segment.SegmentId = FGuid::NewGuid();
+        Segment.SegmentKind = Kind;
+        Segment.Code = Code;
+        Segment.LayerName = Style.LayerName.IsEmpty() ? Code : Style.LayerName;
+        Segment.ControlCode = ControlCode;
+        Segment.ControlParameter = ControlParameter;
+        Segment.CreatedByPointNumber = CreatedByPointNumber;
+        Segment.PointNumbers = PointNumbers;
+        Segment.SurveyPoints = SurveyPoints;
+        ActiveProject.FigureSegments.Add(Segment);
+    };
+
+    for (const FCSTopoFigureRecord& Figure : ActiveProject.Figures)
+    {
+        for (int32 Index = 0; Index + 1 < Figure.PointNumbers.Num(); ++Index)
+        {
+            const FCSTopoShotRecord* A = ShotByNumber.Find(Figure.PointNumbers[Index]);
+            const FCSTopoShotRecord* B = ShotByNumber.Find(Figure.PointNumbers[Index + 1]);
+            if (A != nullptr && B != nullptr)
+            {
+                AddSegment(ECSTopoFigureSegmentKind::Line, Figure.Code, { A->PointNumber, B->PointNumber }, { SurveyPointFromShot(*A), SurveyPointFromShot(*B) }, TEXT(""), TEXT(""), B->PointNumber);
+            }
+        }
+        if (Figure.bLoopClosed && Figure.PointNumbers.Num() >= 2)
+        {
+            const FCSTopoShotRecord* A = ShotByNumber.Find(Figure.PointNumbers.Last());
+            const FCSTopoShotRecord* B = ShotByNumber.Find(Figure.PointNumbers[0]);
+            if (A != nullptr && B != nullptr)
+            {
+                AddSegment(ECSTopoFigureSegmentKind::Line, Figure.Code, { A->PointNumber, B->PointNumber }, { SurveyPointFromShot(*A), SurveyPointFromShot(*B) }, TEXT("CLS"), TEXT(""), A->PointNumber);
+            }
+        }
+    }
+
+    for (const FCSTopoShotRecord& Shot : ActiveProject.Shots)
+    {
+        const FString BaseCode = Shot.BaseCode.IsEmpty() ? Shot.Code : Shot.BaseCode;
+        const TArray<FCSTopoShotRecord>* BaseShots = ShotsByBaseCode.Find(BaseCode);
+        if (BaseShots == nullptr)
+        {
+            continue;
+        }
+
+        int32 ShotIndex = INDEX_NONE;
+        for (int32 Index = 0; Index < BaseShots->Num(); ++Index)
+        {
+            if ((*BaseShots)[Index].PointNumber == Shot.PointNumber)
+            {
+                ShotIndex = Index;
+                break;
+            }
+        }
+        if (ShotIndex == INDEX_NONE)
+        {
+            continue;
+        }
+
+        const FCSTopoShotRecord* Previous = ShotIndex > 0 ? &(*BaseShots)[ShotIndex - 1] : nullptr;
+        if (Shot.ControlCode.Equals(TEXT("JPT"), ESearchCase::IgnoreCase))
+        {
+            const FCSTopoShotRecord* Target = ShotByNumber.Find(ParsePointNumberParameter(Shot.ControlParameter));
+            if (Target != nullptr)
+            {
+                AddSegment(ECSTopoFigureSegmentKind::JoinLine, BaseCode, { Target->PointNumber, Shot.PointNumber }, { SurveyPointFromShot(*Target), SurveyPointFromShot(Shot) }, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+            }
+        }
+        else if ((Shot.ControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase)) && Previous != nullptr)
+        {
+            const double Distance = FCString::Atod(*Shot.ControlParameter);
+            TArray<FVector> Points;
+            if (Shot.ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase))
+            {
+                Points = { FVector(Previous->Northing, Previous->Easting, Previous->Elevation + Distance), FVector(Shot.Northing, Shot.Easting, Shot.Elevation + Distance) };
+            }
+            else
+            {
+                const FVector2D Delta(Shot.Northing - Previous->Northing, Shot.Easting - Previous->Easting);
+                const double Length = FMath::Max(Delta.Size(), 0.000001);
+                const FVector2D Offset(-Delta.Y / Length * Distance, Delta.X / Length * Distance);
+                Points = { FVector(Previous->Northing + Offset.X, Previous->Easting + Offset.Y, Previous->Elevation), FVector(Shot.Northing + Offset.X, Shot.Easting + Offset.Y, Shot.Elevation) };
+            }
+            AddSegment(ECSTopoFigureSegmentKind::OffsetLine, BaseCode, { Previous->PointNumber, Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+        }
+        else if ((Shot.ControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase)) && Previous != nullptr)
+        {
+            FVector CornerPoint = SurveyPointFromShot(Shot);
+            double Width = 0.0;
+            const int32 WidthPointNumber = ParsePointNumberParameter(Shot.ControlParameter);
+            if (const FCSTopoShotRecord* WidthShot = ShotByNumber.Find(WidthPointNumber))
+            {
+                Width = FVector2D::Distance(FVector2D(Shot.Northing, Shot.Easting), FVector2D(WidthShot->Northing, WidthShot->Easting));
+                CornerPoint.Z = WidthShot->Elevation;
+            }
+            else
+            {
+                ParseNumericParameter(Shot.ControlParameter, Width);
+            }
+            const FVector2D Delta(Shot.Northing - Previous->Northing, Shot.Easting - Previous->Easting);
+            const double Length = FMath::Max(Delta.Size(), 0.000001);
+            const FVector2D Offset(-Delta.Y / Length * Width, Delta.X / Length * Width);
+            AddSegment(ECSTopoFigureSegmentKind::Rectangle, BaseCode, { Previous->PointNumber, Shot.PointNumber }, {
+                SurveyPointFromShot(*Previous),
+                SurveyPointFromShot(Shot),
+                FVector(CornerPoint.X + Offset.X, CornerPoint.Y + Offset.Y, CornerPoint.Z),
+                FVector(Previous->Northing + Offset.X, Previous->Easting + Offset.Y, Previous->Elevation),
+                SurveyPointFromShot(*Previous)
+            }, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+        }
+        else if (Shot.ControlCode.Equals(TEXT("SCR"), ESearchCase::IgnoreCase))
+        {
+            double Radius = FCString::Atod(*Shot.ControlParameter);
+            if (Radius <= 0.0 && ShotIndex + 1 < BaseShots->Num())
+            {
+                const FCSTopoShotRecord& NextShot = (*BaseShots)[ShotIndex + 1];
+                Radius = FVector2D::Distance(FVector2D(Shot.Northing, Shot.Easting), FVector2D(NextShot.Northing, NextShot.Easting));
+            }
+            if (Radius > 0.0)
+            {
+                TArray<FVector> Points;
+                for (int32 Index = 0; Index <= 48; ++Index)
+                {
+                    const double Angle = 2.0 * UE_DOUBLE_PI * static_cast<double>(Index) / 48.0;
+                    Points.Add(FVector(Shot.Northing + FMath::Sin(Angle) * Radius, Shot.Easting + FMath::Cos(Angle) * Radius, Shot.Elevation));
+                }
+                AddSegment(ECSTopoFigureSegmentKind::Circle, BaseCode, { Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+            }
+        }
+        else if ((Shot.ControlCode.Equals(TEXT("PT"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("NPT"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("SCE"), ESearchCase::IgnoreCase)) && ShotIndex >= 2)
+        {
+            const FCSTopoShotRecord& A = (*BaseShots)[ShotIndex - 2];
+            const FCSTopoShotRecord& B = (*BaseShots)[ShotIndex - 1];
+            const double AX = A.Easting;
+            const double AY = A.Northing;
+            const double BX = B.Easting;
+            const double BY = B.Northing;
+            const double CX = Shot.Easting;
+            const double CY = Shot.Northing;
+            const double D = 2.0 * (AX * (BY - CY) + BX * (CY - AY) + CX * (AY - BY));
+            if (!FMath::IsNearlyZero(D))
+            {
+                const double UX = ((AX * AX + AY * AY) * (BY - CY) + (BX * BX + BY * BY) * (CY - AY) + (CX * CX + CY * CY) * (AY - BY)) / D;
+                const double UY = ((AX * AX + AY * AY) * (CX - BX) + (BX * BX + BY * BY) * (AX - CX) + (CX * CX + CY * CY) * (BX - AX)) / D;
+                const double Radius = FVector2D::Distance(FVector2D(AX, AY), FVector2D(UX, UY));
+                TArray<FVector> Points;
+                for (int32 Index = 0; Index <= 48; ++Index)
+                {
+                    const double Angle = 2.0 * UE_DOUBLE_PI * static_cast<double>(Index) / 48.0;
+                    Points.Add(FVector(UY + FMath::Sin(Angle) * Radius, UX + FMath::Cos(Angle) * Radius, Shot.Elevation));
+                }
+                AddSegment(Shot.ControlCode.Equals(TEXT("SCE"), ESearchCase::IgnoreCase) ? ECSTopoFigureSegmentKind::Circle : ECSTopoFigureSegmentKind::Arc, BaseCode, { A.PointNumber, B.PointNumber, Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+            }
+        }
+        else if ((Shot.ControlCode.Equals(TEXT("SCPT"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("ESC"), ESearchCase::IgnoreCase)) && ShotIndex >= 2)
+        {
+            TArray<FVector> Points;
+            TArray<int32> PointNumbers;
+            const int32 FirstIndex = FMath::Max(0, ShotIndex - 3);
+            for (int32 Index = FirstIndex; Index <= ShotIndex; ++Index)
+            {
+                Points.Add(SurveyPointFromShot((*BaseShots)[Index]));
+                PointNumbers.Add((*BaseShots)[Index].PointNumber);
+            }
+            AddSegment(ECSTopoFigureSegmentKind::SmoothCurve, BaseCode, PointNumbers, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+        }
+    }
+}
+
 FString UCSTopoSurveySubsystem::NormalizeCode(const FString& Code) const
 {
     FString Normalized = Code.TrimStartAndEnd();
     Normalized.ToUpperInline();
     return Normalized;
-}
-
-FCSTopoCodeStyle UCSTopoSurveySubsystem::MakeDefaultCodeStyle(const FString& Code) const
-{
-    FCSTopoCodeStyle Style;
-    Style.Code = Code;
-    Style.LayerName = Code;
-
-    const uint32 Hash = GetTypeHash(Code);
-    Style.Color = FLinearColor::MakeFromHSV8(static_cast<uint8>(Hash % 255), 170, 240);
-    Style.bVisible = true;
-    return Style;
 }

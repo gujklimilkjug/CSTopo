@@ -1,9 +1,12 @@
 #include "CSTopoProjectLibrary.h"
 
 #include "CSTopoPointCloudImport.h"
+#include "Dom/JsonObject.h"
 #include "JsonObjectConverter.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 namespace
 {
@@ -38,17 +41,130 @@ FString NormalizeCSTopoFilePath(const FString& FilePath)
     return Normalized;
 }
 
-FLinearColor MakeDefaultCodeColor(const FString& Code)
+bool ParseHexColor(const FString& ColorText, FLinearColor& OutColor)
 {
-    if (Code.IsEmpty())
+    FString Hex = ColorText.TrimStartAndEnd();
+    Hex.RemoveFromStart(TEXT("#"));
+    if (Hex.Len() != 6)
     {
-        return FLinearColor::White;
+        return false;
     }
 
-    const uint32 Hash = GetTypeHash(Code);
-    const uint8 Hue = static_cast<uint8>(Hash % 255);
-    return FLinearColor::MakeFromHSV8(Hue, 170, 240);
+    const auto ParseChannel = [](const FString& Text, int32 Offset, uint8& OutChannel)
+    {
+        const FString ChannelText = Text.Mid(Offset, 2);
+        for (TCHAR Character : ChannelText)
+        {
+            if (!FChar::IsHexDigit(Character))
+            {
+                return false;
+            }
+        }
+        if (ChannelText.Len() != 2)
+        {
+            return false;
+        }
+
+        OutChannel = static_cast<uint8>(FParse::HexNumber(*ChannelText));
+        return true;
+    };
+
+    uint8 R = 255;
+    uint8 G = 255;
+    uint8 B = 255;
+    if (!ParseChannel(Hex, 0, R) || !ParseChannel(Hex, 2, G) || !ParseChannel(Hex, 4, B))
+    {
+        return false;
+    }
+
+    OutColor = FLinearColor(FColor(R, G, B, 255));
+    return true;
 }
+
+const TSet<FString>& LoadKnownControlCodes()
+{
+    static TSet<FString> ControlCodes;
+    static bool bLoaded = false;
+    if (bLoaded)
+    {
+        return ControlCodes;
+    }
+
+    bLoaded = true;
+    const FString ControlListPath = FPaths::ProjectDir() / TEXT("Config/CSTopoControlCodeList.json");
+    FString JsonText;
+    if (!FFileHelper::LoadFileToString(JsonText, *ControlListPath))
+    {
+        return ControlCodes;
+    }
+
+    TSharedPtr<FJsonObject> RootObject;
+    const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonText);
+    if (!FJsonSerializer::Deserialize(Reader, RootObject) || !RootObject.IsValid())
+    {
+        return ControlCodes;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Controls = nullptr;
+    if (!RootObject->TryGetArrayField(TEXT("controls"), Controls))
+    {
+        return ControlCodes;
+    }
+
+    for (const TSharedPtr<FJsonValue>& ControlValue : *Controls)
+    {
+        const TSharedPtr<FJsonObject>* ControlObject = nullptr;
+        if (!ControlValue.IsValid() || !ControlValue->TryGetObject(ControlObject) || ControlObject == nullptr || !ControlObject->IsValid())
+        {
+            continue;
+        }
+
+        FString ControlCode;
+        if ((*ControlObject)->TryGetStringField(TEXT("code"), ControlCode))
+        {
+            ControlCode = ControlCode.TrimStartAndEnd().ToUpper();
+            if (!ControlCode.IsEmpty())
+            {
+                ControlCodes.Add(ControlCode);
+            }
+        }
+    }
+    return ControlCodes;
+}
+
+bool IsKnownControlCode(const FString& Code)
+{
+    return LoadKnownControlCodes().Contains(Code.TrimStartAndEnd().ToUpper());
+}
+
+void ParseMeasurementCode(const FString& InCode, FString& OutBaseCode, FString& OutControlCode, FString& OutParameter)
+{
+    TArray<FString> Tokens;
+    InCode.TrimStartAndEnd().ParseIntoArrayWS(Tokens);
+    if (Tokens.IsEmpty())
+    {
+        OutBaseCode.Empty();
+        OutControlCode.Empty();
+        return;
+    }
+
+    OutBaseCode = Tokens[0].TrimStartAndEnd().ToUpper();
+    OutControlCode.Empty();
+    if (Tokens.Num() >= 2 && IsKnownControlCode(Tokens[1]))
+    {
+        OutControlCode = Tokens[1].TrimStartAndEnd().ToUpper();
+        if (OutParameter.IsEmpty() && Tokens.Num() >= 3)
+        {
+            OutParameter = Tokens[2].TrimStartAndEnd().ToUpper();
+        }
+    }
+}
+
+FString BuildDisplayShotCode(const FString& BaseCode, const FString& ControlCode)
+{
+    return ControlCode.IsEmpty() ? BaseCode : FString::Printf(TEXT("%s %s"), *BaseCode, *ControlCode);
+}
+
 }
 
 FCSTopoProjectDocument UCSTopoProjectLibrary::CreateDefaultProject(const FString& ProjectName)
@@ -56,23 +172,13 @@ FCSTopoProjectDocument UCSTopoProjectLibrary::CreateDefaultProject(const FString
     FCSTopoProjectDocument Project;
     Project.ProjectName = ProjectName.IsEmpty() ? TEXT("Untitled CSTopo Project") : ProjectName;
 
-    const TArray<TPair<FString, FLinearColor>> Defaults = {
-        { TEXT("EOP"), FLinearColor(1.0f, 0.85f, 0.05f) },
-        { TEXT("CL"), FLinearColor(0.15f, 0.65f, 1.0f) },
-        { TEXT("FL"), FLinearColor(0.1f, 0.9f, 0.35f) },
-        { TEXT("GB"), FLinearColor(1.0f, 0.35f, 0.2f) }
-    };
-
-    for (const TPair<FString, FLinearColor>& Item : Defaults)
+    Project.SchemaVersion = TEXT("1.4");
+    Project.CodePalette = LoadBuiltInCodePalette();
+    Project.ActiveCode = Project.CodePalette.IsEmpty() ? TEXT("") : Project.CodePalette[0].Code;
+    if (Project.CodePalette.IsEmpty())
     {
-        FCSTopoCodeStyle Style;
-        Style.Code = Item.Key;
-        Style.LayerName = Item.Key;
-        Style.Color = Item.Value;
-        Project.CodePalette.Add(Style);
+        UE_LOG(LogTemp, Warning, TEXT("CSTopo Code List did not load any codes. New projects will start without an active code."));
     }
-
-    Project.ActiveCode = TEXT("EOP");
     return Project;
 }
 
@@ -80,7 +186,7 @@ bool UCSTopoProjectLibrary::SaveProjectToFile(const FCSTopoProjectDocument& Proj
 {
     const FString NormalizedFilePath = NormalizeCSTopoFilePath(FilePath);
     FCSTopoProjectDocument ProjectToSave = Project;
-    ProjectToSave.SchemaVersion = TEXT("1.3");
+    ProjectToSave.SchemaVersion = TEXT("1.4");
     if (ProjectToSave.CacheManifestPath.IsEmpty())
     {
         ProjectToSave.CacheManifestPath = UCSTopoPointCloudImport::BuildDefaultCacheManifestPath(NormalizedFilePath);
@@ -133,7 +239,9 @@ bool UCSTopoProjectLibrary::LoadProjectFromFile(const FString& FilePath, FCSTopo
         return false;
     }
 
-    const bool bLegacyLoopClosureSemantics = !Project.SchemaVersion.Equals(TEXT("1.3"), ESearchCase::CaseSensitive);
+    const bool bLegacyLoopClosureSemantics =
+        !Project.SchemaVersion.Equals(TEXT("1.3"), ESearchCase::CaseSensitive)
+        && !Project.SchemaVersion.Equals(TEXT("1.4"), ESearchCase::CaseSensitive);
     if (bLegacyLoopClosureSemantics)
     {
         for (FCSTopoFigureRecord& Figure : Project.Figures)
@@ -144,7 +252,8 @@ bool UCSTopoProjectLibrary::LoadProjectFromFile(const FString& FilePath, FCSTopo
             }
         }
     }
-    Project.SchemaVersion = TEXT("1.3");
+    Project.SchemaVersion = TEXT("1.4");
+    ApplyBuiltInCodeMetadata(Project);
 
     if (Project.CacheManifestPath.IsEmpty())
     {
@@ -167,6 +276,148 @@ bool UCSTopoProjectLibrary::LoadProjectFromFile(const FString& FilePath, FCSTopo
 
     ErrorMessage.Empty();
     return true;
+}
+
+TArray<FCSTopoCodeStyle> UCSTopoProjectLibrary::LoadBuiltInCodePalette()
+{
+    const FString CodeListPath = FPaths::Combine(FPaths::ProjectConfigDir(), TEXT("CSTopoCodeList.json"));
+    FString Json;
+    if (!FFileHelper::LoadFileToString(Json, *CodeListPath))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("CSTopo Code List not found: %s"), *CodeListPath);
+        return {};
+    }
+
+    TSharedPtr<FJsonObject> RootObject;
+    const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
+    if (!FJsonSerializer::Deserialize(Reader, RootObject) || !RootObject.IsValid())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("CSTopo Code List could not be parsed: %s"), *CodeListPath);
+        return {};
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* CodeValues = nullptr;
+    if (!RootObject->TryGetArrayField(TEXT("codes"), CodeValues))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("CSTopo Code List is missing the codes array: %s"), *CodeListPath);
+        return {};
+    }
+
+    TArray<FCSTopoCodeStyle> Palette;
+    Palette.Reserve(CodeValues->Num());
+    for (const TSharedPtr<FJsonValue>& CodeValue : *CodeValues)
+    {
+        const TSharedPtr<FJsonObject>* CodeObject = nullptr;
+        if (!CodeValue.IsValid() || !CodeValue->TryGetObject(CodeObject) || CodeObject == nullptr || !CodeObject->IsValid())
+        {
+            continue;
+        }
+
+        FString Code;
+        if (!(*CodeObject)->TryGetStringField(TEXT("code"), Code) || Code.IsEmpty())
+        {
+            continue;
+        }
+
+        FCSTopoCodeStyle Style;
+        Style.Code = Code.TrimStartAndEnd().ToUpper();
+        Style.LayerName = Style.Code;
+        (*CodeObject)->TryGetStringField(TEXT("name"), Style.DisplayName);
+        (*CodeObject)->TryGetStringField(TEXT("category"), Style.Category);
+        (*CodeObject)->TryGetStringField(TEXT("point_type"), Style.PointType);
+
+        FString ColorText;
+        if ((*CodeObject)->TryGetStringField(TEXT("color"), ColorText))
+        {
+            ParseHexColor(ColorText, Style.Color);
+        }
+
+        Style.bVisible = true;
+        Palette.Add(Style);
+    }
+
+    return Palette;
+}
+
+bool UCSTopoProjectLibrary::FindBuiltInCodeStyle(const FString& Code, FCSTopoCodeStyle& OutStyle)
+{
+    const FString NormalizedCode = Code.TrimStartAndEnd().ToUpper();
+    for (const FCSTopoCodeStyle& Style : LoadBuiltInCodePalette())
+    {
+        if (Style.Code.Equals(NormalizedCode, ESearchCase::IgnoreCase))
+        {
+            OutStyle = Style;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void UCSTopoProjectLibrary::ApplyBuiltInCodeMetadata(FCSTopoProjectDocument& Project)
+{
+    const TArray<FCSTopoCodeStyle> BuiltInPalette = LoadBuiltInCodePalette();
+    if (BuiltInPalette.IsEmpty())
+    {
+        return;
+    }
+
+    Project.CodePalette = BuiltInPalette;
+
+    const bool bActiveCodeInPalette = Project.CodePalette.ContainsByPredicate([&Project](const FCSTopoCodeStyle& Candidate)
+    {
+        return Candidate.Code.Equals(Project.ActiveCode, ESearchCase::IgnoreCase);
+    });
+    if (!bActiveCodeInPalette)
+    {
+        Project.ActiveCode = Project.CodePalette.IsEmpty() ? TEXT("") : Project.CodePalette[0].Code;
+    }
+
+    for (FCSTopoShotRecord& Shot : Project.Shots)
+    {
+        if (Shot.BaseCode.IsEmpty() || Shot.ControlCode.IsEmpty())
+        {
+            FString ParsedBaseCode;
+            FString ParsedControlCode;
+            FString ParsedParameter = Shot.ControlParameter;
+            ParseMeasurementCode(Shot.Code, ParsedBaseCode, ParsedControlCode, ParsedParameter);
+            if (Shot.BaseCode.IsEmpty())
+            {
+                Shot.BaseCode = ParsedBaseCode.IsEmpty() ? Shot.Code : ParsedBaseCode;
+            }
+            if (Shot.ControlCode.IsEmpty())
+            {
+                Shot.ControlCode = ParsedControlCode;
+            }
+            if (Shot.ControlParameter.IsEmpty())
+            {
+                Shot.ControlParameter = ParsedParameter;
+            }
+        }
+    }
+
+    for (FCSTopoFigureRecord& Figure : Project.Figures)
+    {
+        if (FCSTopoCodeStyle* Style = Project.CodePalette.FindByPredicate([&Figure](const FCSTopoCodeStyle& Candidate)
+        {
+            return Candidate.Code.Equals(Figure.Code, ESearchCase::IgnoreCase);
+        }))
+        {
+            Figure.Style = *Style;
+            Figure.LayerName = Style->LayerName;
+        }
+        else
+        {
+            FCSTopoCodeStyle EmptyStyle;
+            EmptyStyle.Code = Figure.Code;
+            EmptyStyle.DisplayName = Figure.Code;
+            EmptyStyle.PointType = TEXT("Point (no triangulation)");
+            EmptyStyle.LayerName = Figure.Code;
+            EmptyStyle.bVisible = false;
+            Figure.Style = EmptyStyle;
+            Figure.LayerName = Figure.Code;
+        }
+    }
 }
 
 bool UCSTopoProjectLibrary::SaveCacheManifestToFile(const FCSTopoPointCloudCacheManifestDocument& Manifest, const FString& FilePath, FString& ErrorMessage)
@@ -308,24 +559,43 @@ FCSTopoPlaneFitResult UCSTopoProjectLibrary::FitPlaneAtSurveyCoordinate(const TA
     return Result;
 }
 
-FCSTopoShotRecord UCSTopoProjectLibrary::AddFittedShot(FCSTopoProjectDocument& Project, const FString& Code, double Northing, double Easting, double Elevation, double Residual, const FString& SourceCloudId)
+FCSTopoShotRecord UCSTopoProjectLibrary::AddFittedShot(FCSTopoProjectDocument& Project, const FString& Code, double Northing, double Easting, double Elevation, double Residual, const FString& SourceCloudId, const FString& ControlParameter, bool bJoinLinework)
 {
-    FCSTopoFigureRecord& Figure = FindOrCreateOpenFigure(Project, Code);
+    FString BaseCode;
+    FString ControlCode;
+    FString ResolvedControlParameter = ControlParameter;
+    ParseMeasurementCode(Code, BaseCode, ControlCode, ResolvedControlParameter);
+
+    const FCSTopoCodeStyle Style = FindOrCreateStyle(Project, BaseCode);
+    FCSTopoFigureRecord* Figure = nullptr;
+    if (bJoinLinework && DoesCSTopoPointTypeCreateFigureLinework(Style.PointType))
+    {
+        Figure = &FindOrCreateOpenFigure(Project, BaseCode);
+    }
 
     FCSTopoShotRecord Shot;
     Shot.PointNumber = Project.NextPointNumber++;
     Shot.Northing = Northing;
     Shot.Easting = Easting;
     Shot.Elevation = Elevation;
-    Shot.Code = Code;
-    Shot.FigureId = Figure.FigureId;
+    Shot.Code = BuildDisplayShotCode(BaseCode, ControlCode);
+    Shot.BaseCode = BaseCode;
+    Shot.ControlCode = ControlCode;
+    Shot.ControlParameter = ResolvedControlParameter;
+    if (Figure != nullptr)
+    {
+        Shot.FigureId = Figure->FigureId;
+    }
     Shot.FitResidual = Residual;
     Shot.SourceCloudId = SourceCloudId;
     Shot.CreatedAt = FDateTime::UtcNow();
 
     Project.Shots.Add(Shot);
-    Figure.PointNumbers.Add(Shot.PointNumber);
-    Project.ActiveCode = Code;
+    if (Figure != nullptr)
+    {
+        Figure->PointNumbers.Add(Shot.PointNumber);
+    }
+    Project.ActiveCode = BaseCode;
     return Shot;
 }
 
@@ -392,6 +662,7 @@ void UCSTopoProjectLibrary::ApplyCacheManifest(FCSTopoProjectDocument& Project, 
         Source.SurfaceStatus = ManifestEntry->SurfaceStatus;
         Source.SurfaceBuildState = ManifestEntry->SurfaceBuildState;
         Source.bSurfacePrimary = ManifestEntry->bSurfacePrimary;
+        Source.bSurfaceRenderVisible = ManifestEntry->bSurfaceRenderVisible;
         Source.bCloudOverlayVisible = ManifestEntry->bCloudOverlayVisible;
         Source.DefaultViewMode = ManifestEntry->DefaultViewMode;
     }
@@ -408,10 +679,17 @@ FCSTopoCodeStyle UCSTopoProjectLibrary::FindOrCreateStyle(FCSTopoProjectDocument
     }
 
     FCSTopoCodeStyle Style;
+    if (FindBuiltInCodeStyle(Code, Style))
+    {
+        Project.CodePalette.Add(Style);
+        return Style;
+    }
+
     Style.Code = Code;
+    Style.DisplayName = Code;
+    Style.PointType = TEXT("Point (no triangulation)");
     Style.LayerName = Code;
-    Style.Color = MakeDefaultCodeColor(Code);
-    Project.CodePalette.Add(Style);
+    Style.bVisible = false;
     return Style;
 }
 

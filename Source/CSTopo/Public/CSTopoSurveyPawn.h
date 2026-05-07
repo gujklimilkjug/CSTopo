@@ -104,6 +104,9 @@ public:
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
     void TriggerCollectShot();
 
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    void RedrawMeasurementDebug();
+
     UFUNCTION(BlueprintImplementableEvent, Category = "CSTopo")
     void OnCollectShotRequested();
 

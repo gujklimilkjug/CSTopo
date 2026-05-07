@@ -22,6 +22,58 @@ const FCSTopoShotRecord* FindShotByNumber(const FCSTopoProjectDocument& Project,
         return Shot.PointNumber == PointNumber;
     });
 }
+
+const FCSTopoCodeStyle* FindCodeStyle(const FCSTopoProjectDocument& Project, const FString& Code)
+{
+    return Project.CodePalette.FindByPredicate([&Code](const FCSTopoCodeStyle& Style)
+    {
+        return Style.Code.Equals(Code, ESearchCase::IgnoreCase);
+    });
+}
+
+FString ShotBaseCode(const FCSTopoShotRecord& Shot)
+{
+    if (!Shot.BaseCode.IsEmpty())
+    {
+        return Shot.BaseCode;
+    }
+
+    TArray<FString> Tokens;
+    Shot.Code.ParseIntoArrayWS(Tokens);
+    return Tokens.IsEmpty() ? Shot.Code : Tokens[0];
+}
+
+FString LayerForCode(const FCSTopoProjectDocument& Project, const FString& Code)
+{
+    if (const FCSTopoCodeStyle* Style = FindCodeStyle(Project, Code))
+    {
+        return Style->LayerName.IsEmpty() ? Code : Style->LayerName;
+    }
+    return Code.IsEmpty() ? TEXT("POINTS") : Code;
+}
+
+bool ShouldExportFigureLinework(const FCSTopoProjectDocument& Project, const FCSTopoFigureRecord& Figure)
+{
+    FString PointType = Figure.Style.PointType;
+    if (PointType.IsEmpty())
+    {
+        if (const FCSTopoCodeStyle* Style = FindCodeStyle(Project, Figure.Code))
+        {
+            PointType = Style->PointType;
+        }
+    }
+    return DoesCSTopoPointTypeCreateFigureLinework(PointType);
+}
+
+bool ShouldExportSegmentLinework(const FCSTopoProjectDocument& Project, const FCSTopoFigureSegmentRecord& Segment)
+{
+    FString PointType;
+    if (const FCSTopoCodeStyle* Style = FindCodeStyle(Project, Segment.Code))
+    {
+        PointType = Style->PointType;
+    }
+    return DoesCSTopoPointTypeCreateFigureLinework(PointType);
+}
 }
 
 bool UCSTopoExporter::ExportCsv(const FCSTopoProjectDocument& Project, const FString& FilePath, FString& ErrorMessage)
@@ -67,7 +119,8 @@ bool UCSTopoExporter::ExportDxf(const FCSTopoProjectDocument& Project, const FSt
 
     for (const FCSTopoShotRecord& Shot : Project.Shots)
     {
-        const FString Layer = Shot.Code.IsEmpty() ? TEXT("POINTS") : Shot.Code;
+        const FString BaseCode = ShotBaseCode(Shot);
+        const FString Layer = LayerForCode(Project, BaseCode);
         Dxf += FString::Printf(
             TEXT("0\nPOINT\n8\n%s\n10\n%.4f\n20\n%.4f\n30\n%.4f\n"),
             *Layer,
@@ -76,9 +129,44 @@ bool UCSTopoExporter::ExportDxf(const FCSTopoProjectDocument& Project, const FSt
             Shot.Elevation);
     }
 
+    if (!Project.FigureSegments.IsEmpty())
+    {
+        for (const FCSTopoFigureSegmentRecord& Segment : Project.FigureSegments)
+        {
+            if (Segment.SurveyPoints.Num() < 2 || !ShouldExportSegmentLinework(Project, Segment))
+            {
+                continue;
+            }
+
+            const FString Layer = Segment.LayerName.IsEmpty() ? LayerForCode(Project, Segment.Code) : Segment.LayerName;
+            Dxf += FString::Printf(TEXT("0\nPOLYLINE\n8\n%s\n66\n1\n70\n8\n"), *Layer);
+            for (const FVector& Point : Segment.SurveyPoints)
+            {
+                Dxf += FString::Printf(
+                    TEXT("0\nVERTEX\n8\n%s\n10\n%.4f\n20\n%.4f\n30\n%.4f\n"),
+                    *Layer,
+                    Point.Y,
+                    Point.X,
+                    Point.Z);
+            }
+            Dxf += TEXT("0\nSEQEND\n");
+        }
+
+        Dxf += TEXT("0\nENDSEC\n0\nEOF\n");
+
+        if (!FFileHelper::SaveStringToFile(Dxf, *FilePath))
+        {
+            ErrorMessage = FString::Printf(TEXT("Failed to write DXF: %s"), *FilePath);
+            return false;
+        }
+
+        ErrorMessage.Empty();
+        return true;
+    }
+
     for (const FCSTopoFigureRecord& Figure : Project.Figures)
     {
-        if (Figure.PointNumbers.Num() < 2)
+        if (Figure.PointNumbers.Num() < 2 || !ShouldExportFigureLinework(Project, Figure))
         {
             continue;
         }

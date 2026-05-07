@@ -73,6 +73,89 @@ enum class ECSTopoWorkflowState : uint8
     Failed UMETA(DisplayName = "Failed")
 };
 
+UENUM(BlueprintType)
+enum class ECSTopoControlParameterKind : uint8
+{
+    None UMETA(DisplayName = "None"),
+    Distance UMETA(DisplayName = "Distance"),
+    OptionalDistance UMETA(DisplayName = "Optional Distance"),
+    PointNumber UMETA(DisplayName = "Point Number"),
+    DistanceOrPointNumber UMETA(DisplayName = "Distance Or Point Number")
+};
+
+UENUM(BlueprintType)
+enum class ECSTopoControlGeometryKind : uint8
+{
+    None UMETA(DisplayName = "None"),
+    StartLine UMETA(DisplayName = "Start Line"),
+    EndLine UMETA(DisplayName = "End Line"),
+    CloseLine UMETA(DisplayName = "Close Line"),
+    IgnoreLinework UMETA(DisplayName = "Ignore Linework"),
+    JoinToPoint UMETA(DisplayName = "Join To Point"),
+    HorizontalOffset UMETA(DisplayName = "Horizontal Offset"),
+    VerticalOffset UMETA(DisplayName = "Vertical Offset"),
+    StartTangentArc UMETA(DisplayName = "Start Tangent Arc"),
+    EndTangentArc UMETA(DisplayName = "End Tangent Arc"),
+    StartNonTangentArc UMETA(DisplayName = "Start Non-Tangent Arc"),
+    EndNonTangentArc UMETA(DisplayName = "End Non-Tangent Arc"),
+    StartSmoothCurve UMETA(DisplayName = "Start Smooth Curve"),
+    EndSmoothCurve UMETA(DisplayName = "End Smooth Curve"),
+    Rectangle UMETA(DisplayName = "Rectangle"),
+    CircleEdge UMETA(DisplayName = "Circle Edge"),
+    CircleCenter UMETA(DisplayName = "Circle Center")
+};
+
+UENUM(BlueprintType)
+enum class ECSTopoFigureSegmentKind : uint8
+{
+    Line UMETA(DisplayName = "Line"),
+    Arc UMETA(DisplayName = "Arc"),
+    SmoothCurve UMETA(DisplayName = "Smooth Curve"),
+    Rectangle UMETA(DisplayName = "Rectangle"),
+    Circle UMETA(DisplayName = "Circle"),
+    OffsetLine UMETA(DisplayName = "Offset Line"),
+    JoinLine UMETA(DisplayName = "Join Line")
+};
+
+inline FString NormalizeCSTopoPointType(const FString& PointType)
+{
+    FString Normalized = PointType.TrimStartAndEnd();
+    Normalized.ReplaceInline(TEXT("_"), TEXT(" "));
+    Normalized.ToUpperInline();
+    return Normalized;
+}
+
+inline bool IsCSTopoNoTriangulationPointType(const FString& PointType)
+{
+    const FString Normalized = NormalizeCSTopoPointType(PointType);
+    return Normalized.Contains(TEXT("NO TRIANGULATION"));
+}
+
+inline bool DoesCSTopoPointTypeCreateFigureLinework(const FString& PointType)
+{
+    const FString Normalized = NormalizeCSTopoPointType(PointType);
+    return Normalized == TEXT("BREAKLINE")
+        || Normalized == TEXT("LINE")
+        || Normalized == TEXT("LINE FEATURE");
+}
+
+inline bool DoesCSTopoPointTypeCreateTinBreakline(const FString& PointType)
+{
+    return NormalizeCSTopoPointType(PointType) == TEXT("BREAKLINE");
+}
+
+inline bool DoesCSTopoPointTypeContributeToUserTin(const FString& PointType)
+{
+    const FString Normalized = NormalizeCSTopoPointType(PointType);
+    if (Normalized.Contains(TEXT("NO TRIANGULATION")))
+    {
+        return false;
+    }
+    return Normalized.IsEmpty()
+        || Normalized == TEXT("POINT")
+        || Normalized == TEXT("BREAKLINE");
+}
+
 USTRUCT(BlueprintType)
 struct FCSTopoSurfaceTileRecord
 {
@@ -239,6 +322,9 @@ struct FCSTopoSurfaceSettings
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     bool bSurfacePrimary = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    bool bSurfaceRenderVisible = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     bool bCloudOverlayVisible = true;
@@ -463,6 +549,9 @@ struct FCSTopoPointCloudSource
     bool bSurfacePrimary = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    bool bSurfaceRenderVisible = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     bool bCloudOverlayVisible = true;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
@@ -520,6 +609,15 @@ struct FCSTopoCodeStyle
     FString Code;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString DisplayName;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString Category;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString PointType;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FString LayerName;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
@@ -527,6 +625,27 @@ struct FCSTopoCodeStyle
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     bool bVisible = true;
+};
+
+USTRUCT(BlueprintType)
+struct FCSTopoControlCodeDefinition
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString Name;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString Code;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString Action;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    ECSTopoControlParameterKind ParameterKind = ECSTopoControlParameterKind::None;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    ECSTopoControlGeometryKind GeometryKind = ECSTopoControlGeometryKind::None;
 };
 
 USTRUCT(BlueprintType)
@@ -548,6 +667,15 @@ struct FCSTopoShotRecord
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FString Code;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString BaseCode;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString ControlCode;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString ControlParameter;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FGuid FigureId;
@@ -611,18 +739,51 @@ struct FCSTopoFigureRecord
 };
 
 USTRUCT(BlueprintType)
+struct FCSTopoFigureSegmentRecord
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FGuid SegmentId;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    ECSTopoFigureSegmentKind SegmentKind = ECSTopoFigureSegmentKind::Line;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString Code;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString LayerName;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString ControlCode;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FString ControlParameter;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    int32 CreatedByPointNumber = 0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    TArray<int32> PointNumbers;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    TArray<FVector> SurveyPoints;
+};
+
+USTRUCT(BlueprintType)
 struct FCSTopoProjectDocument
 {
     GENERATED_BODY()
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
-    FString SchemaVersion = TEXT("1.3");
+    FString SchemaVersion = TEXT("1.4");
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FString ProjectName = TEXT("Untitled CSTopo Project");
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
-    FString ActiveCode = TEXT("EOP");
+    FString ActiveCode;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FString ActivePointCloudId;
@@ -656,4 +817,7 @@ struct FCSTopoProjectDocument
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     TArray<FCSTopoFigureRecord> Figures;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    TArray<FCSTopoFigureSegmentRecord> FigureSegments;
 };

@@ -20,6 +20,10 @@ from scripts.cstopo_core import (
     export_dxf,
     find_pdal_executable,
     fit_plane_elevation,
+    load_control_code_definitions,
+    measurement_display_code,
+    project_from_dict,
+    parse_control_command,
     read_las_header,
     synthetic_road_samples,
     _build_surface_tile,
@@ -43,14 +47,180 @@ class CSTopoCoreTests(unittest.TestCase):
 
     def test_add_shots_create_code_figures_and_numbering(self):
         project = CSTopoProject.default("Unit Test")
-        project.add_fitted_shot(5000.0, 1000.0, synthetic_road_samples(5000.0, 1000.0), code="EOP")
-        project.add_fitted_shot(5025.0, 1000.0, synthetic_road_samples(5025.0, 1000.0), code="EOP")
-        project.add_fitted_shot(5000.0, 1012.0, synthetic_road_samples(5000.0, 1012.0), code="CL")
+        project.add_fitted_shot(5000.0, 1000.0, synthetic_road_samples(5000.0, 1000.0), code="BLDPAD")
+        project.add_fitted_shot(5025.0, 1000.0, synthetic_road_samples(5025.0, 1000.0), code="BLDPAD")
+        project.add_fitted_shot(5000.0, 1012.0, synthetic_road_samples(5000.0, 1012.0), code="DECK")
 
         self.assertEqual([shot.point_number for shot in project.shots], [1, 2, 3])
         self.assertEqual(len(project.figures), 2)
         self.assertEqual(project.figures[0].point_numbers, [1, 2])
         self.assertEqual(project.figures[1].point_numbers, [3])
+
+    def test_default_code_palette_uses_embedded_code_list(self):
+        project = CSTopoProject.default("Codes")
+        self.assertGreaterEqual(len(project.code_palette), 323)
+
+        by_code = {style.code: style for style in project.code_palette}
+        self.assertIn("AXLE", by_code)
+        self.assertEqual(by_code["AXLE"].category, "MONUMENT")
+        self.assertEqual(by_code["AXLE"].display_name, "Axle")
+        self.assertEqual(by_code["AXLE"].point_type, "Point (no triangulation)")
+        self.assertTrue(by_code["AXLE"].color.startswith("#"))
+
+    def test_loaded_project_palette_is_pruned_to_code_list(self):
+        project = project_from_dict(
+            {
+                "schema_version": "1.3",
+                "project_name": "Legacy Codes",
+                "active_code": "CL",
+                "next_point_number": 1,
+                "code_palette": [
+                    {"code": "EOP", "layer_name": "EOP", "color": "yellow"},
+                    {"code": "CL", "layer_name": "CL", "color": "cyan"},
+                    {"code": "FL", "layer_name": "FL", "color": "green"},
+                    {"code": "GB", "layer_name": "GB", "color": "red"},
+                ],
+                "figures": [
+                    {
+                        "figure_id": "legacy",
+                        "code": "CL",
+                        "layer_name": "CL",
+                        "point_numbers": [],
+                        "closed": False,
+                        "style": {"code": "CL", "layer_name": "CL"},
+                    }
+                ],
+            }
+        )
+
+        codes = {style.code for style in project.code_palette}
+        self.assertNotIn("EOP", codes)
+        self.assertNotIn("CL", codes)
+        self.assertNotIn("GB", codes)
+        self.assertIn("EO", codes)
+        self.assertIn("FL", codes)
+        self.assertEqual(project.active_code, "AXLE")
+        self.assertEqual(project.figures[0].style.point_type, "Point (no triangulation)")
+
+    def test_point_types_control_figures_and_dxf_linework(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = CSTopoProject.default("Point Types")
+            project.add_fitted_shot(5000.0, 1000.0, synthetic_road_samples(5000.0, 1000.0), code="AXLE")
+            project.add_fitted_shot(5010.0, 1000.0, synthetic_road_samples(5010.0, 1000.0), code="AXLE")
+            project.add_fitted_shot(5000.0, 1010.0, synthetic_road_samples(5000.0, 1010.0), code="PEND")
+            project.add_fitted_shot(5010.0, 1010.0, synthetic_road_samples(5010.0, 1010.0), code="PEND")
+            self.assertEqual(project.figures, [])
+            self.assertEqual([shot.figure_id for shot in project.shots], ["", "", "", ""])
+
+            legacy_point_figure = project.open_figure_for("PEND")
+            legacy_point_figure.point_numbers.extend([3, 4])
+            project.add_fitted_shot(5000.0, 1020.0, synthetic_road_samples(5000.0, 1020.0), code="DECK")
+            project.add_fitted_shot(5010.0, 1020.0, synthetic_road_samples(5010.0, 1020.0), code="DECK")
+            project.add_fitted_shot(5000.0, 1030.0, synthetic_road_samples(5000.0, 1030.0), code="BLDPAD")
+            project.add_fitted_shot(5010.0, 1030.0, synthetic_road_samples(5010.0, 1030.0), code="BLDPAD")
+
+            linework_figures = [figure for figure in project.figures if figure.code in {"DECK", "BLDPAD"}]
+            self.assertEqual(len(linework_figures), 2)
+            self.assertEqual(linework_figures[0].point_numbers, [5, 6])
+            self.assertEqual(linework_figures[1].point_numbers, [7, 8])
+
+            dxf_path = root / "point_types.dxf"
+            export_dxf(project, dxf_path)
+            dxf = dxf_path.read_text(encoding="utf-8")
+            self.assertEqual(dxf.count("\nPOINT\n"), 8)
+            self.assertEqual(dxf.count("\nPOLYLINE\n"), 2)
+            self.assertIn("\n8\nDECK\n", dxf)
+            self.assertIn("\n8\nBLDPAD\n", dxf)
+
+    def test_control_code_list_and_command_parsing(self):
+        controls = load_control_code_definitions()
+        codes = [control.code for control in controls]
+        self.assertEqual(
+            codes,
+            ["CLS", "END", "ESC", "IG", "JPT", "NPC", "NPT", "OH", "OV", "PC", "PT", "RECT", "SCE", "SCPT", "SCR", "SSC", "ST"],
+        )
+
+        self.assertEqual(parse_control_command("TOEFILL").base_code, "TOEFILL")
+        parsed = parse_control_command("TOEFILL OH 2.5")
+        self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "OH", "2.5"))
+        parsed = parse_control_command("JPT 42", active_code="TOEFILL")
+        self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "JPT", "42"))
+        parsed = parse_control_command("TOEFILL RECT P42")
+        self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "RECT", "P42"))
+        self.assertEqual(measurement_display_code("toefill", "st"), "TOEFILL ST")
+
+    def test_control_codes_are_one_shot_and_update_figures(self):
+        project = CSTopoProject.default("Controls")
+        project.set_pending_control_code("ST")
+        first = project.add_shot(0.0, 0.0, 100.0, code="BLDPAD")
+        second = project.add_shot(10.0, 0.0, 100.0, code="BLDPAD")
+        project.set_pending_control_code("IG")
+        ignored = project.add_shot(20.0, 0.0, 100.0, code="BLDPAD")
+        project.set_pending_control_code("CLS")
+        closed = project.add_shot(10.0, 10.0, 100.0, code="BLDPAD")
+
+        self.assertEqual(first.code, "BLDPAD ST")
+        self.assertEqual(second.code, "BLDPAD")
+        self.assertEqual(ignored.code, "BLDPAD IG")
+        self.assertEqual(project.pending_control_code, "")
+        self.assertEqual(project.figures[0].point_numbers, [1, 2, 4])
+        self.assertTrue(project.figures[0].loop_closed)
+        self.assertGreaterEqual(len(project.figure_segments), 3)
+
+        project.set_pending_control_code("END")
+        ended = project.add_shot(30.0, 0.0, 100.0, code="BLDPAD")
+        self.assertEqual(ended.code, "BLDPAD END")
+        self.assertTrue(project.figures[-1].closed)
+
+    def test_control_code_parameters_geometry_and_undo(self):
+        project = CSTopoProject.default("Geometry Controls")
+        project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
+        project.add_shot(10.0, 0.0, 100.0, code="BLDPAD")
+        project.add_shot(10.0, 10.0, 100.0, code="BLDPAD JPT 1")
+        project.add_shot(20.0, 10.0, 100.0, code="BLDPAD OH 2.5")
+        project.add_shot(30.0, 10.0, 100.0, code="BLDPAD RECT 4.0")
+        project.add_shot(35.0, 15.0, 100.0, code="BLDPAD SCE")
+        project.add_shot(40.0, 15.0, 100.0, code="BLDPAD SCR 6.0")
+        project.add_shot(45.0, 15.0, 100.0, code="BLDPAD SCPT")
+
+        kinds = {segment.segment_kind for segment in project.figure_segments}
+        self.assertIn("JoinLine", kinds)
+        self.assertIn("OffsetLine", kinds)
+        self.assertIn("Rectangle", kinds)
+        self.assertIn("Circle", kinds)
+        self.assertIn("SmoothCurve", kinds)
+
+        with self.assertRaises(ValueError):
+            project.add_shot(50.0, 15.0, 100.0, code="BLDPAD OH")
+
+        self.assertTrue(project.undo_last_measurement())
+        self.assertEqual(project.next_point_number, 8)
+        self.assertNotIn("SmoothCurve", {segment.segment_kind for segment in project.figure_segments})
+
+    def test_control_code_csv_dxf_export_layers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = CSTopoProject.default("Control Exports")
+            project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
+            project.add_shot(10.0, 0.0, 100.0, code="BLDPAD")
+            project.add_shot(10.0, 10.0, 100.0, code="BLDPAD JPT 1")
+
+            csv_path = root / "controls.csv"
+            dxf_path = root / "controls.dxf"
+            export_csv(project, csv_path)
+            export_dxf(project, dxf_path)
+
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[0]["Code"], "BLDPAD ST")
+            self.assertEqual(rows[2]["Code"], "BLDPAD JPT")
+
+            dxf = dxf_path.read_text(encoding="utf-8")
+            self.assertEqual(dxf.count("\nPOINT\n"), 3)
+            self.assertGreaterEqual(dxf.count("\nPOLYLINE\n"), 2)
+            self.assertIn("\n8\nBLDPAD\n", dxf)
+            self.assertNotIn("\n8\nBLDPAD ST\n", dxf)
 
     def test_save_load_and_exports(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -70,16 +240,20 @@ class CSTopoCoreTests(unittest.TestCase):
             self.assertTrue(loaded.cache_manifest_path.endswith(".cachemanifest.json"))
 
             self.assertEqual(len(loaded.shots), 8)
+            self.assertGreaterEqual(len(loaded.code_palette), 323)
+            axle = next(style for style in loaded.code_palette if style.code == "AXLE")
+            self.assertEqual(axle.category, "MONUMENT")
+            self.assertEqual(axle.point_type, "Point (no triangulation)")
             with csv_path.open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual(rows[0]["Code"], "EOP")
-            self.assertEqual(rows[-1]["Code"], "CL")
+            self.assertEqual(rows[0]["Code"], "BLDPAD")
+            self.assertEqual(rows[-1]["Code"], "DECK")
 
             dxf = dxf_path.read_text(encoding="utf-8")
             self.assertIn("POLYLINE", dxf)
             self.assertIn("POINT", dxf)
-            self.assertIn("EOP", dxf)
-            self.assertIn("CL", dxf)
+            self.assertIn("BLDPAD", dxf)
+            self.assertIn("DECK", dxf)
 
     def test_import_record_and_pdal_command(self):
         with tempfile.TemporaryDirectory() as temp:

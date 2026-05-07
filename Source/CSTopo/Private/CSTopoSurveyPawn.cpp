@@ -37,6 +37,7 @@ bool IsCSTopoDerivedSurfaceComponent(const UPrimitiveComponent* Component)
 
     return Owner->GetName().Contains(TEXT("CSTopoSurface"));
 }
+
 }
 
 ACSTopoSurveyPawn::ACSTopoSurveyPawn()
@@ -428,15 +429,8 @@ void ACSTopoSurveyPawn::CollectShot()
         return;
     }
 
+    RedrawMeasurementDebug();
     const FColor ShotColor = GetShotColor(Shot);
-    DrawDebugSphere(GetWorld(), RenderLocation, ShotMarkerRadius * 1.5f, 16, ShotColor, true, -1.0f, 0, 3.0f);
-
-    if (FVector* PreviousLocation = LastRenderLocationByFigure.Find(Shot.FigureId))
-    {
-        DrawDebugLine(GetWorld(), *PreviousLocation, RenderLocation, ShotColor, true, -1.0f, 0, 10.0f);
-        DrawDebugDirectionalArrow(GetWorld(), *PreviousLocation, RenderLocation, 120.0f, ShotColor, true, -1.0f, 0, 8.0f);
-    }
-    LastRenderLocationByFigure.Add(Shot.FigureId, RenderLocation);
 
     if (GEngine != nullptr)
     {
@@ -452,6 +446,110 @@ void ACSTopoSurveyPawn::CollectShot()
 void ACSTopoSurveyPawn::TriggerCollectShot()
 {
     CollectShot();
+}
+
+void ACSTopoSurveyPawn::RedrawMeasurementDebug()
+{
+    UWorld* World = GetWorld();
+    if (World == nullptr)
+    {
+        return;
+    }
+
+    UGameInstance* GameInstance = GetGameInstance();
+    const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr)
+    {
+        return;
+    }
+
+    FlushPersistentDebugLines(World);
+    LastRenderLocationByFigure.Reset();
+
+    TMap<int32, FCSTopoShotRecord> ShotByPointNumber;
+    for (const FCSTopoShotRecord& Shot : Survey->ActiveProject.Shots)
+    {
+        ShotByPointNumber.Add(Shot.PointNumber, Shot);
+        FVector RenderLocation = FVector::ZeroVector;
+        if (Survey->SurveyPointToRenderLocation(FVector(Shot.Northing, Shot.Easting, Shot.Elevation), RenderLocation))
+        {
+            DrawDebugSphere(World, RenderLocation, ShotMarkerRadius * 1.5f, 16, GetShotColor(Shot), true, -1.0f, 0, 3.0f);
+        }
+    }
+
+    if (!Survey->ActiveProject.FigureSegments.IsEmpty())
+    {
+        for (const FCSTopoFigureSegmentRecord& Segment : Survey->ActiveProject.FigureSegments)
+        {
+            if (Segment.SurveyPoints.Num() < 2)
+            {
+                continue;
+            }
+
+            FCSTopoShotRecord ColorShot;
+            ColorShot.Code = Segment.Code;
+            ColorShot.BaseCode = Segment.Code;
+            const FColor SegmentColor = GetShotColor(ColorShot);
+            for (int32 Index = 0; Index + 1 < Segment.SurveyPoints.Num(); ++Index)
+            {
+                FVector A = FVector::ZeroVector;
+                FVector B = FVector::ZeroVector;
+                if (Survey->SurveyPointToRenderLocation(Segment.SurveyPoints[Index], A)
+                    && Survey->SurveyPointToRenderLocation(Segment.SurveyPoints[Index + 1], B))
+                {
+                    DrawDebugLine(World, A, B, SegmentColor, true, -1.0f, 0, 10.0f);
+                }
+            }
+        }
+        return;
+    }
+
+    for (const FCSTopoFigureRecord& Figure : Survey->ActiveProject.Figures)
+    {
+        FCSTopoCodeStyle FigureStyle;
+        if (!Survey->GetCodeStyle(Figure.Code, FigureStyle) || !DoesCSTopoPointTypeCreateFigureLinework(FigureStyle.PointType))
+        {
+            continue;
+        }
+
+        FCSTopoShotRecord ColorShot;
+        ColorShot.Code = Figure.Code;
+        ColorShot.BaseCode = Figure.Code;
+        const FColor FigureColor = GetShotColor(ColorShot);
+        for (int32 Index = 0; Index + 1 < Figure.PointNumbers.Num(); ++Index)
+        {
+            const FCSTopoShotRecord* A = ShotByPointNumber.Find(Figure.PointNumbers[Index]);
+            const FCSTopoShotRecord* B = ShotByPointNumber.Find(Figure.PointNumbers[Index + 1]);
+            if (A == nullptr || B == nullptr)
+            {
+                continue;
+            }
+
+            FVector RenderA = FVector::ZeroVector;
+            FVector RenderB = FVector::ZeroVector;
+            if (Survey->SurveyPointToRenderLocation(FVector(A->Northing, A->Easting, A->Elevation), RenderA)
+                && Survey->SurveyPointToRenderLocation(FVector(B->Northing, B->Easting, B->Elevation), RenderB))
+            {
+                DrawDebugLine(World, RenderA, RenderB, FigureColor, true, -1.0f, 0, 10.0f);
+            }
+        }
+
+        if (Figure.bLoopClosed && Figure.PointNumbers.Num() >= 2)
+        {
+            const FCSTopoShotRecord* A = ShotByPointNumber.Find(Figure.PointNumbers.Last());
+            const FCSTopoShotRecord* B = ShotByPointNumber.Find(Figure.PointNumbers[0]);
+            if (A != nullptr && B != nullptr)
+            {
+                FVector RenderA = FVector::ZeroVector;
+                FVector RenderB = FVector::ZeroVector;
+                if (Survey->SurveyPointToRenderLocation(FVector(A->Northing, A->Easting, A->Elevation), RenderA)
+                    && Survey->SurveyPointToRenderLocation(FVector(B->Northing, B->Easting, B->Elevation), RenderB))
+                {
+                    DrawDebugLine(World, RenderA, RenderB, FigureColor, true, -1.0f, 0, 10.0f);
+                }
+            }
+        }
+    }
 }
 
 void ACSTopoSurveyPawn::UpdateHoverPreview(float DeltaSeconds)
@@ -738,9 +836,10 @@ FColor ACSTopoSurveyPawn::GetShotColor(const FCSTopoShotRecord& Shot) const
     const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
     if (Survey != nullptr)
     {
+        const FString StyleCode = Shot.BaseCode.IsEmpty() ? Shot.Code : Shot.BaseCode;
         for (const FCSTopoCodeStyle& Style : Survey->ActiveProject.CodePalette)
         {
-            if (Style.Code.Equals(Shot.Code, ESearchCase::IgnoreCase))
+            if (Style.Code.Equals(StyleCode, ESearchCase::IgnoreCase))
             {
                 return Style.Color.ToFColor(true);
             }

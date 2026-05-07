@@ -22,6 +22,8 @@ SURFACE_BUILD_METHOD_GLOBAL_TIN = "GlobalDelaunayTIN"
 SOURCE_POINT_PRECISION = 0.01
 TIN_BOUNDARY_MODE_SUPPORT = "SupportBoundary"
 SURFACE_COLLISION_MODE_STITCHED_TIN = "RuntimeVisibleStitchedTIN"
+BUILT_IN_CODE_LIST_PATH = Path(__file__).resolve().parents[1] / "Config" / "CSTopoCodeList.json"
+BUILT_IN_CONTROL_CODE_LIST_PATH = Path(__file__).resolve().parents[1] / "Config" / "CSTopoControlCodeList.json"
 
 
 @dataclass
@@ -65,6 +67,7 @@ class PointCloudSource:
     surface_build_progress_stage: str = ""
     surface_build_progress_message: str = ""
     surface_primary: bool = True
+    surface_render_visible: bool = True
     cloud_overlay_visible: bool = True
     default_view_mode: str = "SurfaceShaded"
 
@@ -93,6 +96,134 @@ class CodeStyle:
     layer_name: str
     color: str = "white"
     visible: bool = True
+    display_name: str = ""
+    category: str = ""
+    point_type: str = ""
+
+
+@dataclass
+class ControlCodeDefinition:
+    name: str
+    code: str
+    action: str
+    parameter_kind: str = "None"
+    geometry_kind: str = "None"
+
+
+@dataclass
+class ParsedControlCommand:
+    base_code: str
+    control_code: str = ""
+    parameter: str = ""
+
+
+def load_builtin_code_palette() -> List[CodeStyle]:
+    try:
+        raw = json.loads(BUILT_IN_CODE_LIST_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    palette: List[CodeStyle] = []
+    for item in raw.get("codes", []):
+        code = str(item.get("code", "")).strip().upper()
+        if not code:
+            continue
+        palette.append(
+            CodeStyle(
+                code=code,
+                layer_name=code,
+                color=str(item.get("color", "white")),
+                visible=True,
+                display_name=str(item.get("name", "")),
+                category=str(item.get("category", "")),
+                point_type=str(item.get("point_type", "")),
+            )
+        )
+    return palette
+
+
+def load_control_code_definitions() -> List[ControlCodeDefinition]:
+    try:
+        raw = json.loads(BUILT_IN_CONTROL_CODE_LIST_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    controls: List[ControlCodeDefinition] = []
+    for item in raw.get("controls", []):
+        code = str(item.get("code", "")).strip().upper()
+        if not code:
+            continue
+        controls.append(
+            ControlCodeDefinition(
+                name=str(item.get("name", "")).strip(),
+                code=code,
+                action=str(item.get("action", "")).strip(),
+                parameter_kind=str(item.get("parameter_kind", "None")).strip() or "None",
+                geometry_kind=str(item.get("geometry_kind", "None")).strip() or "None",
+            )
+        )
+    return controls
+
+
+def control_definition(code: str) -> Optional[ControlCodeDefinition]:
+    normalized = code.strip().upper()
+    for control in load_control_code_definitions():
+        if control.code == normalized:
+            return control
+    return None
+
+
+def parse_control_command(text: str, active_code: str = "") -> ParsedControlCommand:
+    tokens = [part.strip().upper() for part in text.split() if part.strip()]
+    if not tokens:
+        return ParsedControlCommand(active_code.strip().upper())
+    if control_definition(tokens[0]) is not None:
+        return ParsedControlCommand(
+            base_code=active_code.strip().upper(),
+            control_code=tokens[0],
+            parameter=tokens[1] if len(tokens) > 1 else "",
+        )
+    if len(tokens) >= 2 and control_definition(tokens[1]) is not None:
+        return ParsedControlCommand(
+            base_code=tokens[0],
+            control_code=tokens[1],
+            parameter=tokens[2] if len(tokens) > 2 else "",
+        )
+    return ParsedControlCommand(base_code=tokens[0])
+
+
+def measurement_display_code(base_code: str, control_code: str = "") -> str:
+    base = base_code.strip().upper()
+    control = control_code.strip().upper()
+    return f"{base} {control}" if control else base
+
+
+def builtin_code_style(code: str) -> Optional[CodeStyle]:
+    normalized = code.strip().upper()
+    for style in load_builtin_code_palette():
+        if style.code.upper() == normalized:
+            return style
+    return None
+
+
+def normalize_point_type(point_type: str) -> str:
+    return point_type.strip().replace("_", " ").upper()
+
+
+def point_type_creates_figure_linework(point_type: str) -> bool:
+    normalized = normalize_point_type(point_type)
+    return normalized in {"BREAKLINE", "LINE", "LINE FEATURE"}
+
+
+def point_type_contributes_to_user_tin(point_type: str) -> bool:
+    normalized = normalize_point_type(point_type)
+    if "NO TRIANGULATION" in normalized:
+        return False
+    return normalized in {"", "POINT", "BREAKLINE"}
+
+
+def point_type_creates_tin_breakline(point_type: str) -> bool:
+    return normalize_point_type(point_type) == "BREAKLINE"
 
 
 @dataclass
@@ -193,6 +324,9 @@ class ShotRecord:
     elevation: float
     code: str
     figure_id: str
+    base_code: str = ""
+    control_code: str = ""
+    control_parameter: str = ""
     fit_type: str = "PlaneLeastSquares"
     fit_residual: float = 0.0
     source_cloud_id: str = ""
@@ -211,14 +345,28 @@ class FigureRecord:
     layer_name: str
     point_numbers: List[int] = field(default_factory=list)
     closed: bool = False
-    style: CodeStyle = field(default_factory=lambda: CodeStyle("EOP", "EOP"))
+    loop_closed: bool = False
+    style: CodeStyle = field(default_factory=lambda: CodeStyle("", ""))
+
+
+@dataclass
+class FigureSegmentRecord:
+    segment_id: str
+    segment_kind: str
+    code: str
+    layer_name: str
+    control_code: str = ""
+    control_parameter: str = ""
+    created_by_point_number: int = 0
+    point_numbers: List[int] = field(default_factory=list)
+    survey_points: List[Point3] = field(default_factory=list)
 
 
 @dataclass
 class CSTopoProject:
-    schema_version: str = "1.2"
+    schema_version: str = "1.4"
     project_name: str = "Untitled CSTopo Project"
-    active_code: str = "EOP"
+    active_code: str = ""
     active_point_cloud_id: str = ""
     next_point_number: int = 1
     navigation_mode: str = "Walk"
@@ -230,26 +378,70 @@ class CSTopoProject:
     code_palette: List[CodeStyle] = field(default_factory=list)
     shots: List[ShotRecord] = field(default_factory=list)
     figures: List[FigureRecord] = field(default_factory=list)
+    figure_segments: List[FigureSegmentRecord] = field(default_factory=list)
+    pending_control_code: str = ""
+    pending_control_parameter: str = ""
 
     @classmethod
     def default(cls, project_name: str = "Untitled CSTopo Project") -> "CSTopoProject":
+        code_palette = load_builtin_code_palette()
         return cls(
             project_name=project_name,
-            code_palette=[
-                CodeStyle("EOP", "EOP", "yellow"),
-                CodeStyle("CL", "CL", "cyan"),
-                CodeStyle("FL", "FL", "green"),
-                CodeStyle("GB", "GB", "red"),
-            ],
+            schema_version="1.4",
+            active_code=code_palette[0].code if code_palette else "",
+            code_palette=code_palette,
         )
 
     def style_for(self, code: str) -> CodeStyle:
+        parsed = parse_control_command(code, self.active_code)
+        code = parsed.base_code or code
         for style in self.code_palette:
             if style.code.upper() == code.upper():
                 return style
-        style = CodeStyle(code=code, layer_name=code)
-        self.code_palette.append(style)
-        return style
+        style = builtin_code_style(code)
+        if style is not None:
+            self.code_palette.append(style)
+            return style
+        return CodeStyle(
+            code=code,
+            layer_name=code,
+            display_name=code,
+            point_type="Point (no triangulation)",
+            visible=False,
+        )
+
+    def set_pending_control_code(self, control_code: str, parameter: str = "") -> None:
+        normalized = control_code.strip().upper()
+        if normalized and control_definition(normalized) is None:
+            raise ValueError(f"Unknown CSTopo control code: {control_code}")
+        self.pending_control_code = normalized
+        self.pending_control_parameter = parameter.strip().upper()
+
+    def clear_pending_control_code(self) -> None:
+        self.pending_control_code = ""
+        self.pending_control_parameter = ""
+
+    def _validate_control_parameter(self, control_code: str, parameter: str) -> None:
+        definition = control_definition(control_code)
+        if definition is None or definition.parameter_kind in {"None", "OptionalDistance"}:
+            return
+        if definition.parameter_kind == "PointNumber":
+            if not parameter.upper().lstrip("P").isdigit():
+                raise ValueError(f"{control_code} needs a point number parameter.")
+            return
+        if definition.parameter_kind == "Distance":
+            try:
+                float(parameter)
+            except ValueError as exc:
+                raise ValueError(f"{control_code} needs a numeric distance parameter.") from exc
+            return
+        if definition.parameter_kind == "DistanceOrPointNumber":
+            if parameter.upper().startswith("P") and parameter[1:].isdigit():
+                return
+            try:
+                float(parameter)
+            except ValueError as exc:
+                raise ValueError(f"{control_code} needs a distance or P<pointNumber> parameter.") from exc
 
     def open_figure_for(self, code: str) -> FigureRecord:
         for figure in self.figures:
@@ -275,15 +467,29 @@ class CSTopoProject:
         source_cloud_id: str = "",
         notes: str = "",
     ) -> ShotRecord:
-        active_code = code or self.active_code
-        figure = self.open_figure_for(active_code)
+        parsed = parse_control_command(code or self.active_code, self.active_code)
+        active_code = parsed.base_code or self.active_code
+        control_code = parsed.control_code or self.pending_control_code
+        control_parameter = parsed.parameter or self.pending_control_parameter
+        self._validate_control_parameter(control_code, control_parameter)
+
+        style = self.style_for(active_code)
+        if not style.visible and builtin_code_style(active_code) is None:
+            raise ValueError(f"Code is not in the CSTopo Code List: {active_code}")
+        if control_code == "ST":
+            self.split_figure(active_code)
+        join_linework = control_code != "IG"
+        figure = self.open_figure_for(active_code) if join_linework and point_type_creates_figure_linework(style.point_type) else None
         shot = ShotRecord(
             point_number=self.next_point_number,
             northing=northing,
             easting=easting,
             elevation=elevation,
-            code=active_code,
-            figure_id=figure.figure_id,
+            code=measurement_display_code(active_code, control_code),
+            figure_id=figure.figure_id if figure is not None else "",
+            base_code=active_code,
+            control_code=control_code,
+            control_parameter=control_parameter,
             fit_residual=fit_residual,
             source_cloud_id=source_cloud_id,
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -292,7 +498,14 @@ class CSTopoProject:
         self.next_point_number += 1
         self.active_code = active_code
         self.shots.append(shot)
-        figure.point_numbers.append(shot.point_number)
+        if figure is not None:
+            figure.point_numbers.append(shot.point_number)
+        if control_code == "END":
+            self.split_figure(active_code)
+        elif control_code == "CLS":
+            self.close_figure(active_code)
+        self.clear_pending_control_code()
+        self.rebuild_figure_segments()
         return shot
 
     def add_fitted_shot(
@@ -319,12 +532,32 @@ class CSTopoProject:
         for figure in self.figures:
             if figure.code.upper() == active_code.upper() and not figure.closed:
                 figure.closed = True
+                figure.loop_closed = False
 
     def close_figure(self, code: Optional[str] = None) -> None:
-        self.open_figure_for(code or self.active_code).closed = True
+        figure = self.open_figure_for(code or self.active_code)
+        figure.closed = True
+        figure.loop_closed = True
+
+    def undo_last_measurement(self) -> bool:
+        if not self.shots:
+            return False
+        point_number = self.shots[-1].point_number
+        self.shots.pop()
+        for figure in self.figures:
+            figure.point_numbers = [number for number in figure.point_numbers if number != point_number]
+        self.figures = [figure for figure in self.figures if figure.point_numbers]
+        self.next_point_number = max([shot.point_number for shot in self.shots], default=0) + 1
+        self.rebuild_figure_segments()
+        return True
+
+    def rebuild_figure_segments(self) -> None:
+        self.figure_segments = build_figure_segments(self)
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.schema_version = "1.4"
+        backfill_code_metadata(self)
         if not self.cache_manifest_path:
             self.cache_manifest_path = str(build_default_cache_manifest_path(path))
         manifest = build_cache_manifest(self, path)
@@ -336,6 +569,7 @@ class CSTopoProject:
     def load(cls, path: Path) -> "CSTopoProject":
         raw = json.loads(path.read_text(encoding="utf-8"))
         project = project_from_dict(raw)
+        backfill_code_metadata(project)
         if not project.cache_manifest_path:
             project.cache_manifest_path = str(build_default_cache_manifest_path(path))
         manifest_path = Path(project.cache_manifest_path)
@@ -423,22 +657,271 @@ def derived_surface_from_dict(raw: dict) -> DerivedSurfaceManifest:
     )
 
 
+def code_style_from_dict(raw: dict) -> CodeStyle:
+    code = raw.get("code", raw.get("Code", ""))
+    layer_name = raw.get("layer_name", raw.get("layerName", raw.get("LayerName", code)))
+    style = CodeStyle(
+        code=code,
+        layer_name=layer_name,
+        color=raw.get("color", raw.get("Color", "white")),
+        visible=raw.get("visible", raw.get("bVisible", raw.get("Visible", True))),
+        display_name=raw.get("display_name", raw.get("displayName", raw.get("DisplayName", ""))),
+        category=raw.get("category", raw.get("Category", "")),
+        point_type=raw.get("point_type", raw.get("pointType", raw.get("PointType", ""))),
+    )
+    builtin = builtin_code_style(style.code)
+    if builtin is not None:
+        if not style.display_name:
+            style.display_name = builtin.display_name
+        if not style.category:
+            style.category = builtin.category
+        if not style.point_type:
+            style.point_type = builtin.point_type
+        if style.color in {"", "white"}:
+            style.color = builtin.color
+    return style
+
+
+def shot_from_dict(raw: dict) -> ShotRecord:
+    code = raw.get("code", raw.get("Code", ""))
+    parsed = parse_control_command(code)
+    base_code = raw.get("base_code", raw.get("baseCode", raw.get("BaseCode", parsed.base_code or code)))
+    control_code = raw.get("control_code", raw.get("controlCode", raw.get("ControlCode", parsed.control_code)))
+    control_parameter = raw.get("control_parameter", raw.get("controlParameter", raw.get("ControlParameter", parsed.parameter)))
+    return ShotRecord(
+        point_number=raw.get("point_number", raw.get("PointNumber", 1)),
+        northing=raw.get("northing", raw.get("Northing", 0.0)),
+        easting=raw.get("easting", raw.get("Easting", 0.0)),
+        elevation=raw.get("elevation", raw.get("Elevation", 0.0)),
+        code=measurement_display_code(base_code, control_code),
+        figure_id=raw.get("figure_id", raw.get("FigureId", "")),
+        base_code=base_code,
+        control_code=control_code,
+        control_parameter=control_parameter,
+        fit_type=raw.get("fit_type", raw.get("FitType", "PlaneLeastSquares")),
+        fit_residual=raw.get("fit_residual", raw.get("FitResidual", 0.0)),
+        source_cloud_id=raw.get("source_cloud_id", raw.get("SourceCloudId", "")),
+        created_at=raw.get("created_at", raw.get("CreatedAt", "")),
+        notes=raw.get("notes", raw.get("Notes", "")),
+        measurement_source=raw.get("measurement_source", raw.get("MeasurementSource", "DerivedSurface")),
+        surface_id=raw.get("surface_id", raw.get("SurfaceId", "")),
+        surface_tile_id=raw.get("surface_tile_id", raw.get("SurfaceTileId", "")),
+        surface_method=raw.get("surface_method", raw.get("SurfaceMethod", "")),
+    )
+
+
+def figure_segment_from_dict(raw: dict) -> FigureSegmentRecord:
+    return FigureSegmentRecord(
+        segment_id=raw.get("segment_id", raw.get("SegmentId", str(uuid.uuid4()))),
+        segment_kind=raw.get("segment_kind", raw.get("SegmentKind", "Line")),
+        code=raw.get("code", raw.get("Code", "")),
+        layer_name=raw.get("layer_name", raw.get("LayerName", raw.get("code", raw.get("Code", "")))),
+        control_code=raw.get("control_code", raw.get("ControlCode", "")),
+        control_parameter=raw.get("control_parameter", raw.get("ControlParameter", "")),
+        created_by_point_number=raw.get("created_by_point_number", raw.get("CreatedByPointNumber", 0)),
+        point_numbers=list(raw.get("point_numbers", raw.get("PointNumbers", []))),
+        survey_points=[tuple(point) for point in raw.get("survey_points", raw.get("SurveyPoints", []))],
+    )
+
+
+def backfill_code_metadata(project: CSTopoProject) -> None:
+    builtins = load_builtin_code_palette()
+    if not builtins:
+        return
+
+    project.code_palette = list(builtins)
+    palette_by_code = {style.code.upper(): style for style in project.code_palette}
+    if project.active_code.upper() not in palette_by_code:
+        project.active_code = project.code_palette[0].code if project.code_palette else ""
+
+    for figure in project.figures:
+        style = palette_by_code.get(figure.code.upper())
+        if style is not None:
+            figure.layer_name = style.layer_name
+            figure.style = style
+        else:
+            figure.layer_name = figure.code
+            figure.style = CodeStyle(
+                code=figure.code,
+                layer_name=figure.code,
+                display_name=figure.code,
+                point_type="Point (no triangulation)",
+                visible=False,
+            )
+
+
+def _shot_point(shot: ShotRecord) -> Point3:
+    return (shot.northing, shot.easting, shot.elevation)
+
+
+def _point_number_from_parameter(parameter: str) -> Optional[int]:
+    text = parameter.strip().upper()
+    if text.startswith("P"):
+        text = text[1:]
+    return int(text) if text.isdigit() else None
+
+
+def _sample_circle_points(center_n: float, center_e: float, radius: float, z: float, count: int = 49) -> List[Point3]:
+    points: List[Point3] = []
+    for index in range(count):
+        angle = 2.0 * math.pi * index / (count - 1)
+        points.append((center_n + math.sin(angle) * radius, center_e + math.cos(angle) * radius, z))
+    return points
+
+
+def _circle_from_three_points(a: ShotRecord, b: ShotRecord, c: ShotRecord) -> Optional[List[Point3]]:
+    ax, ay = a.easting, a.northing
+    bx, by = b.easting, b.northing
+    cx, cy = c.easting, c.northing
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1.0e-9:
+        return None
+    ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d
+    uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d
+    radius = math.hypot(ax - ux, ay - uy)
+    return _sample_circle_points(uy, ux, radius, c.elevation)
+
+
+def _rectangle_points(corner: ShotRecord, previous: Optional[ShotRecord], parameter: str, shots_by_number: Dict[int, ShotRecord]) -> List[Point3]:
+    if parameter.upper().startswith("P"):
+        opposite = shots_by_number.get(_point_number_from_parameter(parameter) or -1)
+        if opposite is None:
+            return []
+        return [
+            _shot_point(corner),
+            (corner.northing, opposite.easting, corner.elevation),
+            _shot_point(opposite),
+            (opposite.northing, corner.easting, opposite.elevation),
+            _shot_point(corner),
+        ]
+    if previous is None:
+        return []
+    try:
+        width = float(parameter)
+    except ValueError:
+        return []
+    dn = corner.northing - previous.northing
+    de = corner.easting - previous.easting
+    length = math.hypot(dn, de)
+    if length <= 1.0e-9:
+        return []
+    pn = -de / length * width
+    pe = dn / length * width
+    return [
+        _shot_point(previous),
+        _shot_point(corner),
+        (corner.northing + pn, corner.easting + pe, corner.elevation),
+        (previous.northing + pn, previous.easting + pe, previous.elevation),
+        _shot_point(previous),
+    ]
+
+
+def build_figure_segments(project: CSTopoProject) -> List[FigureSegmentRecord]:
+    segments: List[FigureSegmentRecord] = []
+    shots_by_number = {shot.point_number: shot for shot in project.shots}
+    shots_by_base: Dict[str, List[ShotRecord]] = {}
+    for shot in project.shots:
+        shots_by_base.setdefault((shot.base_code or shot.code).upper(), []).append(shot)
+
+    def add_segment(kind: str, code: str, point_numbers: List[int], points: List[Point3], control_code: str = "", parameter: str = "", created_by: int = 0) -> None:
+        if len(points) < 2:
+            return
+        style = project.style_for(code)
+        segments.append(
+            FigureSegmentRecord(
+                segment_id=str(uuid.uuid4()),
+                segment_kind=kind,
+                code=code,
+                layer_name=style.layer_name,
+                control_code=control_code,
+                control_parameter=parameter,
+                created_by_point_number=created_by,
+                point_numbers=point_numbers,
+                survey_points=points,
+            )
+        )
+
+    for figure in project.figures:
+        sequence = [number for number in figure.point_numbers if number in shots_by_number]
+        for a_number, b_number in zip(sequence, sequence[1:]):
+            add_segment("Line", figure.code, [a_number, b_number], [_shot_point(shots_by_number[a_number]), _shot_point(shots_by_number[b_number])])
+        if figure.loop_closed and len(sequence) >= 2:
+            add_segment("Line", figure.code, [sequence[-1], sequence[0]], [_shot_point(shots_by_number[sequence[-1]]), _shot_point(shots_by_number[sequence[0]])], "CLS", "", sequence[-1])
+
+    for shot in project.shots:
+        base_code = (shot.base_code or shot.code).upper()
+        base_shots = shots_by_base.get(base_code, [])
+        index = base_shots.index(shot) if shot in base_shots else -1
+        previous = base_shots[index - 1] if index > 0 else None
+        control = shot.control_code.upper()
+        if control == "JPT":
+            target = shots_by_number.get(_point_number_from_parameter(shot.control_parameter) or -1)
+            if target is not None:
+                add_segment("JoinLine", base_code, [target.point_number, shot.point_number], [_shot_point(target), _shot_point(shot)], control, shot.control_parameter, shot.point_number)
+        elif control in {"OH", "OV"} and previous is not None:
+            try:
+                distance = float(shot.control_parameter)
+            except ValueError:
+                continue
+            if control == "OH":
+                dn = shot.northing - previous.northing
+                de = shot.easting - previous.easting
+                length = math.hypot(dn, de)
+                if length <= 1.0e-9:
+                    continue
+                offset_n = -de / length * distance
+                offset_e = dn / length * distance
+                points = [
+                    (previous.northing + offset_n, previous.easting + offset_e, previous.elevation),
+                    (shot.northing + offset_n, shot.easting + offset_e, shot.elevation),
+                ]
+            else:
+                points = [
+                    (previous.northing, previous.easting, previous.elevation + distance),
+                    (shot.northing, shot.easting, shot.elevation + distance),
+                ]
+            add_segment("OffsetLine", base_code, [previous.point_number, shot.point_number], points, control, shot.control_parameter, shot.point_number)
+        elif control in {"PT", "NPT", "SCE"} and index >= 2:
+            circle = _circle_from_three_points(base_shots[index - 2], base_shots[index - 1], shot)
+            if circle is not None:
+                add_segment("Circle" if control == "SCE" else "Arc", base_code, [base_shots[index - 2].point_number, base_shots[index - 1].point_number, shot.point_number], circle, control, shot.control_parameter, shot.point_number)
+        elif control in {"SCPT", "ESC"} and index >= 2:
+            curve_points = [_shot_point(candidate) for candidate in base_shots[max(0, index - 3) : index + 1]]
+            add_segment("SmoothCurve", base_code, [candidate.point_number for candidate in base_shots[max(0, index - 3) : index + 1]], curve_points, control, shot.control_parameter, shot.point_number)
+        elif control == "RECT":
+            points = _rectangle_points(shot, previous, shot.control_parameter, shots_by_number)
+            add_segment("Rectangle", base_code, [point.point_number for point in [previous, shot] if point is not None], points, control, shot.control_parameter, shot.point_number)
+        elif control == "SCR":
+            try:
+                radius = float(shot.control_parameter) if shot.control_parameter else 0.0
+            except ValueError:
+                radius = 0.0
+            if radius <= 0.0 and index + 1 < len(base_shots):
+                next_shot = base_shots[index + 1]
+                radius = math.hypot(next_shot.northing - shot.northing, next_shot.easting - shot.easting)
+            if radius > 0.0:
+                add_segment("Circle", base_code, [shot.point_number], _sample_circle_points(shot.northing, shot.easting, radius, shot.elevation), control, shot.control_parameter, shot.point_number)
+
+    return segments
+
+
 def project_from_dict(raw: dict) -> CSTopoProject:
     project = CSTopoProject(
-        schema_version=raw.get("schema_version", "1.0"),
-        project_name=raw.get("project_name", "Untitled CSTopo Project"),
-        active_code=raw.get("active_code", "EOP"),
-        active_point_cloud_id=raw.get("active_point_cloud_id", ""),
-        next_point_number=raw.get("next_point_number", 1),
-        navigation_mode=raw.get("navigation_mode", "Walk"),
-        point_clouds=[PointCloudSource(**item) for item in raw.get("point_clouds", [])],
-        cache_manifest_path=raw.get("cache_manifest_path", ""),
-        runtime_streaming=RuntimeStreamingSettings(**raw.get("runtime_streaming", {})),
-        surface_settings=SurfaceSettings(**raw.get("surface_settings", {})),
-        derived_surfaces=[derived_surface_from_dict(item) for item in raw.get("derived_surfaces", [])],
-        code_palette=[CodeStyle(**item) for item in raw.get("code_palette", [])],
-        shots=[ShotRecord(**item) for item in raw.get("shots", [])],
+        schema_version="1.4",
+        project_name=raw.get("project_name", raw.get("projectName", "Untitled CSTopo Project")),
+        active_code=raw.get("active_code", raw.get("activeCode", "")),
+        active_point_cloud_id=raw.get("active_point_cloud_id", raw.get("activePointCloudId", "")),
+        next_point_number=raw.get("next_point_number", raw.get("nextPointNumber", 1)),
+        navigation_mode=raw.get("navigation_mode", raw.get("navigationMode", "Walk")),
+        point_clouds=[PointCloudSource(**item) for item in raw.get("point_clouds", raw.get("pointClouds", []))],
+        cache_manifest_path=raw.get("cache_manifest_path", raw.get("cacheManifestPath", "")),
+        runtime_streaming=RuntimeStreamingSettings(**raw.get("runtime_streaming", raw.get("runtimeStreaming", {}))),
+        surface_settings=SurfaceSettings(**raw.get("surface_settings", raw.get("surfaceSettings", {}))),
+        derived_surfaces=[derived_surface_from_dict(item) for item in raw.get("derived_surfaces", raw.get("derivedSurfaces", []))],
+        code_palette=[code_style_from_dict(item) for item in raw.get("code_palette", raw.get("codePalette", []))],
+        shots=[shot_from_dict(item) for item in raw.get("shots", [])],
         figures=[],
+        figure_segments=[figure_segment_from_dict(item) for item in raw.get("figure_segments", raw.get("figureSegments", []))],
     )
     for item in raw.get("figures", []):
         style_raw = item.get("style") or {"code": item["code"], "layer_name": item.get("layer_name", item["code"])}
@@ -449,9 +932,12 @@ def project_from_dict(raw: dict) -> CSTopoProject:
                 layer_name=item.get("layer_name", item["code"]),
                 point_numbers=list(item.get("point_numbers", [])),
                 closed=bool(item.get("closed", False)),
-                style=CodeStyle(**style_raw),
+                loop_closed=bool(item.get("loop_closed", item.get("bLoopClosed", item.get("loopClosed", False)))),
+                style=code_style_from_dict(style_raw),
             )
         )
+    backfill_code_metadata(project)
+    project.rebuild_figure_segments()
     return project
 
 
@@ -2397,21 +2883,22 @@ def export_dxf(project: CSTopoProject, path: Path) -> None:
     lines.extend(["0", "ENDTAB", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES"])
 
     for shot in project.shots:
-        layer = project.style_for(shot.code).layer_name
+        layer = project.style_for(shot.base_code or shot.code).layer_name
         lines.extend(["0", "POINT", "8", layer, "10", f"{shot.easting:.4f}", "20", f"{shot.northing:.4f}", "30", f"{shot.elevation:.4f}"])
 
-    for figure in project.figures:
-        if len(figure.point_numbers) < 2:
+    if not project.figure_segments:
+        project.rebuild_figure_segments()
+
+    for segment in project.figure_segments:
+        if len(segment.survey_points) < 2:
             continue
-        lines.extend(["0", "POLYLINE", "8", figure.layer_name, "66", "1", "70", "8"])
-        sequence = list(figure.point_numbers)
-        if figure.closed and sequence:
-            sequence.append(sequence[0])
-        for point_number in sequence:
-            shot = shot_by_number.get(point_number)
-            if shot is None:
-                continue
-            lines.extend(["0", "VERTEX", "8", figure.layer_name, "10", f"{shot.easting:.4f}", "20", f"{shot.northing:.4f}", "30", f"{shot.elevation:.4f}"])
+        style = project.style_for(segment.code)
+        if not point_type_creates_figure_linework(style.point_type):
+            continue
+        layer = segment.layer_name or style.layer_name
+        lines.extend(["0", "POLYLINE", "8", layer, "66", "1", "70", "8"])
+        for northing, easting, elevation in segment.survey_points:
+            lines.extend(["0", "VERTEX", "8", layer, "10", f"{easting:.4f}", "20", f"{northing:.4f}", "30", f"{elevation:.4f}"])
         lines.extend(["0", "SEQEND"])
     lines.extend(["0", "ENDSEC", "0", "EOF"])
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -2432,10 +2919,10 @@ def create_sample_project() -> CSTopoProject:
     for offset in range(4):
         n = 5000.0 + offset * 25.0
         e = 1000.0
-        project.add_fitted_shot(n, e, synthetic_road_samples(n, e), code="EOP", source_cloud_id="demo-cloud")
-    project.split_figure("EOP")
+        project.add_fitted_shot(n, e, synthetic_road_samples(n, e), code="BLDPAD", source_cloud_id="demo-cloud")
+    project.split_figure("BLDPAD")
     for offset in range(4):
         n = 5000.0 + offset * 25.0
         e = 1012.0
-        project.add_fitted_shot(n, e, synthetic_road_samples(n, e), code="CL", source_cloud_id="demo-cloud")
+        project.add_fitted_shot(n, e, synthetic_road_samples(n, e), code="DECK", source_cloud_id="demo-cloud")
     return project

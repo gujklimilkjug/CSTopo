@@ -95,7 +95,7 @@ public:
     FString GetCurrentProjectPath() const;
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo")
-    FCSTopoShotRecord AddFittedShotFromSamples(const FString& Code, double Northing, double Easting, const TArray<FVector>& Samples, const FString& SourceCloudId, bool& bSuccess);
+    FCSTopoShotRecord AddFittedShotFromSamples(const FString& Code, double Northing, double Easting, const TArray<FVector>& Samples, const FString& SourceCloudId, bool& bSuccess, const FString& ControlParameter = TEXT(""), bool bJoinLinework = true);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo")
     bool ExportCadDeliverables(const FString& CsvPath, const FString& DxfPath, FString& ErrorMessage) const;
@@ -140,6 +140,21 @@ public:
     bool SetSurfaceVisible(const FString& SourceId, bool bVisible);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Surface")
+    bool ToggleActiveSourceTinRenderVisible(FString& StatusMessage);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Surface")
+    bool SetActiveSourceTinRenderVisible(bool bVisible, FString& StatusMessage);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Surface")
+    bool ToggleUserTinVisible(FString& StatusMessage);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Surface")
+    bool SetUserTinVisible(bool bVisible, FString& StatusMessage);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Surface")
+    FString GetUserTinStatusLine() const;
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Surface")
     bool SetCloudOverlayVisible(const FString& SourceId, bool bVisible);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Surface")
@@ -150,6 +165,18 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
     bool CollectTopoShotFromView(const FVector& ViewOrigin, const FVector& ViewDirection, float TraceRadius, float SampleRadius, FCSTopoShotRecord& Shot, FVector& RenderLocation, FString& ErrorMessage);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    TArray<FCSTopoControlCodeDefinition> GetControlCodeDefinitions() const;
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    bool SetPendingControlCode(const FString& ControlCode, const FString& Parameter, FString& StatusMessage);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    void ClearPendingControlCode();
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    bool UndoLastMeasurement(FString& StatusMessage);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
     bool QueryActiveSurfaceHeightAtRenderLocation(const FVector& RenderLocation, FVector& SurfaceRenderLocation) const;
@@ -182,6 +209,9 @@ public:
     bool GetActiveSurveyBounds(FVector2D& OutMinSurveyNe, FVector2D& OutMaxSurveyNe) const;
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    bool SurveyPointToRenderLocation(const FVector& SurveyPoint, FVector& RenderLocation) const;
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
     void UpdateSurveyMapPose(const FVector& CameraRenderLocation, const FVector& ViewDirection);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
@@ -208,6 +238,10 @@ private:
     TMap<FString, TObjectPtr<class ALidarPointCloudActor>> PointCloudActors;
     UPROPERTY()
     TMap<FString, TObjectPtr<class AActor>> SurfaceActors;
+    UPROPERTY()
+    TObjectPtr<class AActor> UserTinActor;
+    UPROPERTY()
+    TObjectPtr<class UProceduralMeshComponent> UserTinMeshComponent;
 
     TMap<FString, FString> PointCloudActorDisplayPaths;
     TMap<FString, FCSTopoLoadedSurface> LoadedSurfaces;
@@ -233,6 +267,14 @@ private:
     FVector LastSurveyMapRenderLocation = FVector::ZeroVector;
     FVector LastSurveyMapViewDirection = FVector::ForwardVector;
     bool bHasSurveyMapPose = false;
+    bool bUserTinVisible = false;
+    bool bUserTinDirty = true;
+    int32 LastUserTinShotCount = INDEX_NONE;
+    int32 LastUserTinFigureCount = INDEX_NONE;
+    FString UserTinStatusLine = TEXT("User TIN hidden.");
+    FString PendingControlCode;
+    FString PendingControlParameter;
+    TArray<FCSTopoControlCodeDefinition> ControlCodeDefinitions;
 
     bool SpawnPointCloudActor(FCSTopoPointCloudSource& Source, FString& ErrorMessage);
     bool LoadDerivedSurfaceForSource(FCSTopoPointCloudSource& Source, FString& ErrorMessage);
@@ -256,6 +298,16 @@ private:
     FString GetProjectCacheDirectory() const;
     bool ShouldUseCopcWindowStreaming(const FCSTopoPointCloudSource& Source) const;
     void RefreshRuntimeWindowProcess();
+    void RefreshUserTinPreviewIfNeeded();
+    void DestroyUserTinPreview();
+    bool RebuildUserTinPreview(FString& StatusMessage);
+    void LoadControlCodeDefinitions();
+    const FCSTopoControlCodeDefinition* FindControlCodeDefinition(const FString& ControlCode) const;
+    bool ValidateControlParameter(const FString& ControlCode, const FString& Parameter, FString& StatusMessage) const;
+    FString BuildNextMeasurementCode() const;
+    void ApplyControlBeforeShot(const FString& BaseCode, const FString& ControlCode);
+    void ApplyControlAfterShot(const FCSTopoShotRecord& Shot);
+    void RebuildFigureSegments();
     bool StartRuntimeWindowUpdate(FCSTopoPointCloudSource& Source, const FVector& CameraSourcePoint, FString& ErrorMessage);
     void SetLidarPointBudget(bool bUseStreamingBudget) const;
     void RefreshPointCloudSourceStates();
@@ -263,5 +315,4 @@ private:
     void SyncActivePointCloudFlags();
     void RefreshPointCloudViewMode(FCSTopoPointCloudSource& Source);
     FString NormalizeCode(const FString& Code) const;
-    FCSTopoCodeStyle MakeDefaultCodeStyle(const FString& Code) const;
 };

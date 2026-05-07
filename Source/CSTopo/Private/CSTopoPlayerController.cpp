@@ -4,6 +4,7 @@
 #include "CSTopoHomeScreenSlate.h"
 #include "CSTopoPointCloudToolbarSlate.h"
 #include "CSTopoReticleSlate.h"
+#include "CSTopoSurveyHudSlate.h"
 #include "CSTopoSurveyPawn.h"
 #include "CSTopoSurveySubsystem.h"
 #include "DesktopPlatformModule.h"
@@ -85,6 +86,18 @@ void ACSTopoPlayerController::BeginPlay()
 
         GEngine->GameViewport->AddViewportWidgetContent(SurveyStatusOverlayContainer.ToSharedRef(), 91);
 
+        SAssignNew(SurveyHud, SCSTopoSurveyHud)
+            .SurveySubsystem(Survey)
+            .OnCollectShot(FSimpleDelegate::CreateUObject(this, &ACSTopoPlayerController::CollectShotFromSurveyHud))
+            .OnToggleFocus(FSimpleDelegate::CreateUObject(this, &ACSTopoPlayerController::ToggleSurveyCollectorFocus))
+            .OnUndo(FSimpleDelegate::CreateUObject(this, &ACSTopoPlayerController::UndoLastMeasurementFromSurveyHud));
+
+        SurveyHudContainer = SNew(SWeakWidget)
+            .PossiblyNullContent(SurveyHud.ToSharedRef());
+
+        GEngine->GameViewport->AddViewportWidgetContent(SurveyHudContainer.ToSharedRef(), 92);
+        SurveyHud->SetVisibility(EVisibility::Collapsed);
+
         SAssignNew(MainMenu, SCSTopoMainMenu)
             .SurveySubsystem(Survey)
             .PointCloudToolbar(PointCloudToolbar);
@@ -165,6 +178,8 @@ void ACSTopoPlayerController::SetupInputComponent()
     EnhancedInput->BindAction(LookPitchAction, ETriggerEvent::Triggered, this, &ACSTopoPlayerController::HandleLookPitchInput);
     EnhancedInput->BindAction(FlySpeedAction, ETriggerEvent::Triggered, this, &ACSTopoPlayerController::HandleFlySpeedInput);
     EnhancedInput->BindAction(ToggleNavigationAction, ETriggerEvent::Started, this, &ACSTopoPlayerController::HandleToggleNavigationInput);
+    EnhancedInput->BindAction(ToggleUserTinAction, ETriggerEvent::Started, this, &ACSTopoPlayerController::HandleToggleUserTinInput);
+    EnhancedInput->BindAction(UndoAction, ETriggerEvent::Started, this, &ACSTopoPlayerController::HandleUndoInput);
     EnhancedInput->BindAction(SprintAction, ETriggerEvent::Started, this, &ACSTopoPlayerController::HandleSprintStarted);
     EnhancedInput->BindAction(SprintAction, ETriggerEvent::Completed, this, &ACSTopoPlayerController::HandleSprintCompleted);
     EnhancedInput->BindAction(CollectShotAction, ETriggerEvent::Started, this, &ACSTopoPlayerController::HandleCollectShotInput);
@@ -254,6 +269,13 @@ void ACSTopoPlayerController::HandleEscapePressed()
         return;
     }
 
+    if (SurveyInputMode == ESurveyInputMode::CollectorUI)
+    {
+        EnterSurveyGameMode();
+        SetSurveyInputDebug(TEXT("Escape collector close"));
+        return;
+    }
+
     if (PointCloudToolbar.IsValid() && PointCloudToolbar->GetVisibility() == EVisibility::Visible)
     {
         SetToolbarVisible(false);
@@ -306,6 +328,10 @@ void ACSTopoPlayerController::SetSurveyInputDebug(const FString& LastEvent)
     {
         ModeText = TEXT("Game");
     }
+    else if (SurveyInputMode == ESurveyInputMode::CollectorUI)
+    {
+        ModeText = TEXT("Collector");
+    }
 
     if (UCSTopoSurveySubsystem* Survey = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr)
     {
@@ -322,11 +348,12 @@ FText ACSTopoPlayerController::GetSurveyStatusOverlayText() const
     }
 
     return FText::FromString(FString::Printf(
-        TEXT("%s\nCode: %s | Next Pt: %d\n%s"),
+        TEXT("%s\nCode: %s | Next Pt: %d\n%s\n%s"),
         *Survey->GetActiveSurveyStatusLine(),
         *Survey->ActiveProject.ActiveCode,
         Survey->ActiveProject.NextPointNumber,
-        *Survey->GetHoverStatusLine()));
+        *Survey->GetHoverStatusLine(),
+        *Survey->GetUserTinStatusLine()));
 }
 
 void ACSTopoPlayerController::ShowHomeScreen()
@@ -421,6 +448,11 @@ void ACSTopoPlayerController::SetSurveyInputEnabled(bool bEnabled)
     {
         SurveyStatusOverlay->SetVisibility(bEnabled ? EVisibility::HitTestInvisible : EVisibility::Collapsed);
     }
+    if (SurveyHud.IsValid())
+    {
+        SurveyHud->SetVisibility(bEnabled ? EVisibility::Visible : EVisibility::Collapsed);
+        SurveyHud->SetCollectorInteractive(false);
+    }
     if (PointCloudToolbar.IsValid())
     {
         PointCloudToolbar->SetVisibility(EVisibility::Collapsed);
@@ -450,7 +482,19 @@ void ACSTopoPlayerController::SetSurveyInputEnabled(bool bEnabled)
 
 void ACSTopoPlayerController::ToggleSurveyCollectorFocus()
 {
-    SetSurveyInputDebug(TEXT("collector UI disabled"));
+    if (!bSurveyInputEnabled || !SurveyHud.IsValid())
+    {
+        return;
+    }
+
+    if (SurveyInputMode == ESurveyInputMode::CollectorUI)
+    {
+        EnterSurveyGameMode();
+    }
+    else
+    {
+        EnterCollectorMode();
+    }
 }
 
 void ACSTopoPlayerController::OpenProjectFromDialog()
@@ -619,6 +663,28 @@ void ACSTopoPlayerController::CollectShotFromSurveyHud()
     }
 }
 
+void ACSTopoPlayerController::UndoLastMeasurementFromSurveyHud()
+{
+    UCSTopoSurveySubsystem* Survey = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr)
+    {
+        return;
+    }
+
+    FString StatusMessage;
+    Survey->UndoLastMeasurement(StatusMessage);
+    if (ACSTopoSurveyPawn* SurveyPawn = Cast<ACSTopoSurveyPawn>(GetPawn()))
+    {
+        SurveyPawn->RedrawMeasurementDebug();
+    }
+    RefreshPointCloudToolbar();
+    SetSurveyInputDebug(TEXT("Ctrl+Z undo"));
+    if (GEngine != nullptr && !StatusMessage.IsEmpty())
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 2.5f, FColor::Yellow, StatusMessage);
+    }
+}
+
 void ACSTopoPlayerController::MonitorStartupSurfaceBuild()
 {
     UCSTopoSurveySubsystem* Survey = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
@@ -732,6 +798,8 @@ void ACSTopoPlayerController::EnsureSurveyEnhancedInput()
     LookPitchAction = MakeAction(TEXT("IA_CSTopo_LookPitch"), EInputActionValueType::Axis1D);
     FlySpeedAction = MakeAction(TEXT("IA_CSTopo_FlySpeed"), EInputActionValueType::Axis1D);
     ToggleNavigationAction = MakeAction(TEXT("IA_CSTopo_ToggleNavigation"), EInputActionValueType::Boolean);
+    ToggleUserTinAction = MakeAction(TEXT("IA_CSTopo_ToggleUserTIN"), EInputActionValueType::Boolean);
+    UndoAction = MakeAction(TEXT("IA_CSTopo_UndoMeasurement"), EInputActionValueType::Boolean);
     SprintAction = MakeAction(TEXT("IA_CSTopo_Sprint"), EInputActionValueType::Boolean);
     CollectShotAction = MakeAction(TEXT("IA_CSTopo_CollectShot"), EInputActionValueType::Boolean);
     EscapeAction = MakeAction(TEXT("IA_CSTopo_Escape"), EInputActionValueType::Boolean);
@@ -765,6 +833,8 @@ void ACSTopoPlayerController::EnsureSurveyEnhancedInput()
     MapKey(LookPitchAction, EKeys::MouseY);
     MapKey(FlySpeedAction, EKeys::MouseWheelAxis);
     MapKey(ToggleNavigationAction, EKeys::F);
+    MapKey(ToggleUserTinAction, EKeys::T);
+    MapKey(UndoAction, EKeys::Z);
     MapKey(SprintAction, EKeys::LeftShift);
     MapKey(SprintAction, EKeys::RightShift);
     MapKey(CollectShotAction, EKeys::LeftMouseButton);
@@ -922,6 +992,52 @@ void ACSTopoPlayerController::HandleToggleNavigationInput()
     }
 }
 
+void ACSTopoPlayerController::HandleToggleUserTinInput()
+{
+    if (!bSurveyInputEnabled || SurveyInputMode != ESurveyInputMode::Game)
+    {
+        return;
+    }
+
+    UCSTopoSurveySubsystem* Survey = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr)
+    {
+        return;
+    }
+
+    FString StatusMessage;
+    if (IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift))
+    {
+        Survey->ToggleUserTinVisible(StatusMessage);
+        SetSurveyInputDebug(TEXT("Shift+T user TIN enhanced"));
+    }
+    else
+    {
+        Survey->ToggleActiveSourceTinRenderVisible(StatusMessage);
+        SetSurveyInputDebug(TEXT("T source TIN enhanced"));
+    }
+
+    if (GEngine != nullptr && !StatusMessage.IsEmpty())
+    {
+        GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Cyan, StatusMessage);
+    }
+}
+
+void ACSTopoPlayerController::HandleUndoInput()
+{
+    if (!bSurveyInputEnabled || (SurveyInputMode != ESurveyInputMode::Game && SurveyInputMode != ESurveyInputMode::CollectorUI))
+    {
+        return;
+    }
+
+    if (!IsInputKeyDown(EKeys::LeftControl) && !IsInputKeyDown(EKeys::RightControl))
+    {
+        return;
+    }
+
+    UndoLastMeasurementFromSurveyHud();
+}
+
 void ACSTopoPlayerController::HandleSprintStarted()
 {
     if (!bSurveyInputEnabled || SurveyInputMode != ESurveyInputMode::Game)
@@ -963,7 +1079,7 @@ void ACSTopoPlayerController::HandleTabInput()
         return;
     }
 
-    SetSurveyInputDebug(TEXT("Tab reserved enhanced"));
+    ToggleSurveyCollectorFocus();
 }
 
 void ACSTopoPlayerController::ApplySurveyInputMode(bool bFlushPressedKeys)
@@ -981,6 +1097,10 @@ void ACSTopoPlayerController::ApplySurveyInputMode(bool bFlushPressedKeys)
     if (SurveyStatusOverlay.IsValid())
     {
         SurveyStatusOverlay->SetVisibility(EVisibility::HitTestInvisible);
+    }
+    if (SurveyHud.IsValid())
+    {
+        SurveyHud->SetCollectorInteractive(false);
     }
 
     SurveyInputMode = ESurveyInputMode::Game;
@@ -1011,7 +1131,28 @@ void ACSTopoPlayerController::EnterSurveyGameMode()
 
 void ACSTopoPlayerController::EnterCollectorMode()
 {
-    EnterSurveyGameMode();
+    if (!bSurveyInputEnabled || !SurveyHud.IsValid())
+    {
+        return;
+    }
+
+    SurveyInputMode = ESurveyInputMode::CollectorUI;
+    PendingSurveyGameFocusRepairFrames = 0;
+    ResetHeldSurveyInput();
+    ResetIgnoreMoveInput();
+    ResetIgnoreLookInput();
+    SetIgnoreMoveInput(true);
+    SetIgnoreLookInput(true);
+
+    SurveyHud->SetCollectorInteractive(true);
+    FInputModeGameAndUI InputMode;
+    InputMode.SetWidgetToFocus(SurveyHud);
+    InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+    InputMode.SetHideCursorDuringCapture(false);
+    SetInputMode(InputMode);
+    bShowMouseCursor = true;
+    SurveyHud->FocusCodeEditor();
+    SetSurveyInputDebug(TEXT("collector focus"));
 }
 
 void ACSTopoPlayerController::EnterModalUIMode()

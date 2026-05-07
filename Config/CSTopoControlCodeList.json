@@ -1,0 +1,126 @@
+{
+  "schema_version": "1.0",
+  "source_workbook": "C:/Users/KJames/Documents/Feature Definition Manager/Code List Files/ControlCodeList.xlsx",
+  "sheet": "Sheet1",
+  "controls": [
+    {
+      "name": "CloseLine",
+      "code": "CLS",
+      "parameter_kind": "None",
+      "geometry_kind": "CloseLine",
+      "action": "Closes a line to the first point in the sequence. Close a line when a new one is started or when a line ends."
+    },
+    {
+      "name": "EndLine",
+      "code": "END",
+      "parameter_kind": "None",
+      "geometry_kind": "EndLine",
+      "action": "Ends the line joining sequence"
+    },
+    {
+      "name": "EndSmoothCurve2",
+      "code": "ESC",
+      "parameter_kind": "None",
+      "geometry_kind": "EndSmoothCurve",
+      "action": "Ends a smooth curve"
+    },
+    {
+      "name": "DoNotJoinLine",
+      "code": "IG",
+      "parameter_kind": "None",
+      "geometry_kind": "IgnoreLinework",
+      "action": "Ignores any joining operation"
+    },
+    {
+      "name": "JoinToPointNumber",
+      "code": "JPT",
+      "parameter_kind": "PointNumber",
+      "geometry_kind": "JoinToPoint",
+      "action": "Joins to a specified point name"
+    },
+    {
+      "name": "StartNonTangentArc",
+      "code": "NPC",
+      "parameter_kind": "None",
+      "geometry_kind": "StartNonTangentArc",
+      "action": "Starts a non-tangential arc"
+    },
+    {
+      "name": "EndNonTangentArc",
+      "code": "NPT",
+      "parameter_kind": "None",
+      "geometry_kind": "EndNonTangentArc",
+      "action": "Ends a non-tangential arc"
+    },
+    {
+      "name": "HorizontalOffset",
+      "code": "OH",
+      "parameter_kind": "Distance",
+      "geometry_kind": "HorizontalOffset",
+      "action": "Starts an offset line at the specified horizontal offset"
+    },
+    {
+      "name": "VerticalOffset",
+      "code": "OV",
+      "parameter_kind": "Distance",
+      "geometry_kind": "VerticalOffset",
+      "action": "Starts an offset line at the specified vertical offset"
+    },
+    {
+      "name": "StartTangentArc",
+      "code": "PC",
+      "parameter_kind": "None",
+      "geometry_kind": "StartTangentArc",
+      "action": "Starts a tangential arc"
+    },
+    {
+      "name": "EndTangentArc",
+      "code": "PT",
+      "parameter_kind": "None",
+      "geometry_kind": "EndTangentArc",
+      "action": "Ends a tangential arc"
+    },
+    {
+      "name": "StartRectangle",
+      "code": "RECT",
+      "parameter_kind": "DistanceOrPointNumber",
+      "geometry_kind": "Rectangle",
+      "action": "Starts a rectangle with an associated point as a corner point and the next point in sequence as an adjacent corner point. Either the width or the point on the opposite side must be specified."
+    },
+    {
+      "name": "StartCircleEdge",
+      "code": "SCE",
+      "parameter_kind": "None",
+      "geometry_kind": "CircleEdge",
+      "action": "Starts a circle with an associated point as the first known point on the circle followed by the next two known points."
+    },
+    {
+      "name": "EndSmoothCurve",
+      "code": "SCPT",
+      "parameter_kind": "None",
+      "geometry_kind": "EndSmoothCurve",
+      "action": "Ends a smooth curve"
+    },
+    {
+      "name": "StartCircleCenter",
+      "code": "SCR",
+      "parameter_kind": "OptionalDistance",
+      "geometry_kind": "CircleCenter",
+      "action": "Starts a circle with an associated point as the center and a specified radius. If the radius is not specified, the next point in the sequence is taken as a point on the circle."
+    },
+    {
+      "name": "StartSmoothCurve",
+      "code": "SSC",
+      "parameter_kind": "None",
+      "geometry_kind": "StartSmoothCurve",
+      "action": "Starts a smooth curve"
+    },
+    {
+      "name": "StartLine",
+      "code": "ST",
+      "parameter_kind": "None",
+      "geometry_kind": "StartLine",
+      "action": "Starts a new line joining sequence. The previous joining sequence with the same code is ended."
+    }
+  ]
+}
