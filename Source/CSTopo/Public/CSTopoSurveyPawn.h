@@ -15,6 +15,7 @@ struct FCSTopoRenderedShotMarker
 {
     int32 PointNumber = INDEX_NONE;
     FVector RenderLocation = FVector::ZeroVector;
+    FColor Color = FColor::Yellow;
 };
 
 UCLASS()
@@ -146,7 +147,7 @@ private:
     float GetPrecisionMovementScalar() const;
     FColor GetShotColor(const FCSTopoShotRecord& Shot) const;
     void EnsureSurveyVisualization();
-    void RebuildPointMarkerMesh(const TArray<TPair<FCSTopoShotRecord, FVector>>& ShotMarkers);
+    void RebuildPointMarkerMesh(const TArray<FCSTopoRenderedShotMarker>& ShotMarkers);
     void UpdatePointLabels();
 
     bool bSprintHeld = false;
@@ -171,6 +172,7 @@ private:
     FString LastFocusedPointCloudId;
     TMap<FGuid, FVector> LastRenderLocationByFigure;
     TArray<FCSTopoRenderedShotMarker> RenderedShotMarkers;
+    TSet<int32> LastVisiblePointLabelNumbers;
 
     UPROPERTY()
     TObjectPtr<AActor> SurveyVisualizationActor;
@@ -180,4 +182,7 @@ private:
 
     UPROPERTY()
     TArray<TObjectPtr<UTextRenderComponent>> PointLabelComponents;
+
+    UPROPERTY()
+    TArray<TObjectPtr<UTextRenderComponent>> PointLabelBoldComponents;
 };

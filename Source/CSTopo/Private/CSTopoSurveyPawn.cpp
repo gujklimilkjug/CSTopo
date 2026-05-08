@@ -475,21 +475,20 @@ void ACSTopoSurveyPawn::RedrawMeasurementDebug()
     RenderedShotMarkers.Reset();
 
     TMap<int32, FCSTopoShotRecord> ShotByPointNumber;
-    TArray<TPair<FCSTopoShotRecord, FVector>> ShotMarkers;
     for (const FCSTopoShotRecord& Shot : Survey->ActiveProject.Shots)
     {
         ShotByPointNumber.Add(Shot.PointNumber, Shot);
         FVector RenderLocation = FVector::ZeroVector;
         if (Survey->SurveyPointToRenderLocation(FVector(Shot.Northing, Shot.Easting, Shot.Elevation), RenderLocation))
         {
-            ShotMarkers.Add(TPair<FCSTopoShotRecord, FVector>(Shot, RenderLocation));
             FCSTopoRenderedShotMarker Marker;
             Marker.PointNumber = Shot.PointNumber;
             Marker.RenderLocation = RenderLocation;
+            Marker.Color = GetShotColor(Shot);
             RenderedShotMarkers.Add(Marker);
         }
     }
-    RebuildPointMarkerMesh(ShotMarkers);
+    RebuildPointMarkerMesh(RenderedShotMarkers);
     UpdatePointLabels();
 
     if (!Survey->ActiveProject.FigureSegments.IsEmpty())
@@ -883,7 +882,7 @@ void ACSTopoSurveyPawn::EnsureSurveyVisualization()
     }
 }
 
-void ACSTopoSurveyPawn::RebuildPointMarkerMesh(const TArray<TPair<FCSTopoShotRecord, FVector>>& ShotMarkers)
+void ACSTopoSurveyPawn::RebuildPointMarkerMesh(const TArray<FCSTopoRenderedShotMarker>& ShotMarkers)
 {
     EnsureSurveyVisualization();
     if (PointMarkerMeshComponent == nullptr)
@@ -910,10 +909,10 @@ void ACSTopoSurveyPawn::RebuildPointMarkerMesh(const TArray<TPair<FCSTopoShotRec
 
     const float PyramidHeight = FMath::Max(ShotMarkerRadius * 3.0f, 30.0f);
     const float BaseHalfWidth = FMath::Max(ShotMarkerRadius * 0.45f, 4.0f);
-    for (const TPair<FCSTopoShotRecord, FVector>& Marker : ShotMarkers)
+    for (const FCSTopoRenderedShotMarker& Marker : ShotMarkers)
     {
         const int32 BaseIndex = Vertices.Num();
-        const FVector Tip = Marker.Value;
+        const FVector Tip = Marker.RenderLocation;
         const FVector BaseCenter = Tip + FVector(0.0f, 0.0f, PyramidHeight);
         Vertices.Add(Tip);
         Vertices.Add(BaseCenter + FVector(BaseHalfWidth, BaseHalfWidth, 0.0f));
@@ -930,7 +929,7 @@ void ACSTopoSurveyPawn::RebuildPointMarkerMesh(const TArray<TPair<FCSTopoShotRec
             BaseIndex + 1, BaseIndex + 4, BaseIndex + 3
         });
 
-        const FLinearColor MarkerColor = FLinearColor(GetShotColor(Marker.Key));
+        const FLinearColor MarkerColor = FLinearColor(Marker.Color);
         for (int32 ColorIndex = 0; ColorIndex < 5; ++ColorIndex)
         {
             Colors.Add(MarkerColor);
@@ -953,6 +952,14 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
                 Label->SetVisibility(false, true);
             }
         }
+        for (UTextRenderComponent* Label : PointLabelBoldComponents)
+        {
+            if (Label != nullptr)
+            {
+                Label->SetVisibility(false, true);
+            }
+        }
+        LastVisiblePointLabelNumbers.Reset();
         return;
     }
 
@@ -966,7 +973,10 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
     {
         int32 PointNumber = INDEX_NONE;
         FVector RenderLocation = FVector::ZeroVector;
+        FColor Color = FColor::White;
         double DistanceSq = 0.0;
+        bool bIsSnapTarget = false;
+        bool bWasVisible = false;
     };
 
     constexpr int32 MaxNearbyLabels = 24;
@@ -975,7 +985,7 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
     const FVector CameraLocation = Camera->GetComponentLocation();
     const FVector CameraForward = Camera->GetForwardVector();
 
-    auto AddLabelCandidate = [&](const FCSTopoRenderedShotMarker& Marker, bool bForce)
+    auto AddLabelCandidate = [&](const FCSTopoRenderedShotMarker& Marker, bool bForce, bool bIsSnapTarget)
     {
         if (Marker.PointNumber == INDEX_NONE || AddedPointNumbers.Contains(Marker.PointNumber))
         {
@@ -983,7 +993,9 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
         }
 
         const FVector ToMarker = Marker.RenderLocation - CameraLocation;
-        if (!bForce && FVector::DotProduct(ToMarker.GetSafeNormal(), CameraForward) <= 0.0f)
+        const bool bWasVisible = LastVisiblePointLabelNumbers.Contains(Marker.PointNumber);
+        const float FacingDot = FVector::DotProduct(ToMarker.GetSafeNormal(), CameraForward);
+        if (!bForce && FacingDot <= (bWasVisible ? -0.08f : 0.04f))
         {
             return;
         }
@@ -991,7 +1003,10 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
         FLabelCandidate Candidate;
         Candidate.PointNumber = Marker.PointNumber;
         Candidate.RenderLocation = Marker.RenderLocation;
+        Candidate.Color = Marker.Color;
         Candidate.DistanceSq = ToMarker.SizeSquared();
+        Candidate.bIsSnapTarget = bIsSnapTarget;
+        Candidate.bWasVisible = bWasVisible;
         Candidates.Add(Candidate);
         AddedPointNumbers.Add(Marker.PointNumber);
     };
@@ -1003,23 +1018,46 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
             return Marker.PointNumber == HoverSnapPointNumber;
         }))
         {
-            AddLabelCandidate(*HoverMarker, true);
+            AddLabelCandidate(*HoverMarker, true, true);
         }
     }
 
     TArray<FCSTopoRenderedShotMarker> NearbyMarkers = RenderedShotMarkers;
     NearbyMarkers.Sort([&CameraLocation](const FCSTopoRenderedShotMarker& A, const FCSTopoRenderedShotMarker& B)
     {
-        return FVector::DistSquared(A.RenderLocation, CameraLocation) < FVector::DistSquared(B.RenderLocation, CameraLocation);
+        const double ADistanceSq = FVector::DistSquared(A.RenderLocation, CameraLocation);
+        const double BDistanceSq = FVector::DistSquared(B.RenderLocation, CameraLocation);
+        if (!FMath::IsNearlyEqual(ADistanceSq, BDistanceSq))
+        {
+            return ADistanceSq < BDistanceSq;
+        }
+        return A.PointNumber < B.PointNumber;
     });
 
     for (const FCSTopoRenderedShotMarker& Marker : NearbyMarkers)
     {
-        if (Candidates.Num() >= MaxNearbyLabels)
+        AddLabelCandidate(Marker, false, false);
+    }
+
+    Candidates.Sort([](const FLabelCandidate& A, const FLabelCandidate& B)
+    {
+        if (A.bIsSnapTarget != B.bIsSnapTarget)
         {
-            break;
+            return A.bIsSnapTarget;
         }
-        AddLabelCandidate(Marker, false);
+
+        const double AScore = A.DistanceSq * (A.bWasVisible ? 0.72 : 1.0);
+        const double BScore = B.DistanceSq * (B.bWasVisible ? 0.72 : 1.0);
+        if (!FMath::IsNearlyEqual(AScore, BScore))
+        {
+            return AScore < BScore;
+        }
+        return A.PointNumber < B.PointNumber;
+    });
+
+    if (Candidates.Num() > MaxNearbyLabels)
+    {
+        Candidates.SetNum(MaxNearbyLabels);
     }
 
     while (PointLabelComponents.Num() < Candidates.Num())
@@ -1038,11 +1076,29 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
         Label->bCastDynamicShadow = false;
         PointLabelComponents.Add(Label);
     }
+    while (PointLabelBoldComponents.Num() < Candidates.Num())
+    {
+        UTextRenderComponent* Label = NewObject<UTextRenderComponent>(SurveyVisualizationActor, *FString::Printf(TEXT("PointLabelBold_%d"), PointLabelBoldComponents.Num()));
+        Label->SetupAttachment(SurveyVisualizationActor->GetRootComponent());
+        Label->RegisterComponent();
+        Label->SetMobility(EComponentMobility::Movable);
+        Label->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        Label->SetCollisionResponseToAllChannels(ECR_Ignore);
+        Label->SetHorizontalAlignment(EHTA_Center);
+        Label->SetVerticalAlignment(EVRTA_TextCenter);
+        Label->SetWorldSize(30.0f);
+        Label->SetTextRenderColor(FColor::White);
+        Label->SetCastShadow(false);
+        Label->bCastDynamicShadow = false;
+        PointLabelBoldComponents.Add(Label);
+    }
 
     const float LabelHeight = FMath::Max(ShotMarkerRadius * 4.2f, 42.0f);
+    TSet<int32> NewVisiblePointLabelNumbers;
     for (int32 Index = 0; Index < PointLabelComponents.Num(); ++Index)
     {
         UTextRenderComponent* Label = PointLabelComponents[Index];
+        UTextRenderComponent* BoldLabel = PointLabelBoldComponents.IsValidIndex(Index) ? PointLabelBoldComponents[Index] : nullptr;
         if (Label == nullptr)
         {
             continue;
@@ -1051,17 +1107,51 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
         if (!Candidates.IsValidIndex(Index))
         {
             Label->SetVisibility(false, true);
+            if (BoldLabel != nullptr)
+            {
+                BoldLabel->SetVisibility(false, true);
+            }
             continue;
         }
 
         const FLabelCandidate& Candidate = Candidates[Index];
         const FVector LabelLocation = Candidate.RenderLocation + FVector(0.0f, 0.0f, LabelHeight);
-        Label->SetText(FText::FromString(FString::Printf(TEXT("P%d"), Candidate.PointNumber)));
+        const FRotator LabelRotation = (CameraLocation - LabelLocation).Rotation();
+        const FString LabelText = FString::Printf(TEXT("%d"), Candidate.PointNumber);
+        const float LabelWorldSize = Candidate.bIsSnapTarget ? 29.0f : 24.0f;
+
+        Label->SetText(FText::FromString(LabelText));
+        Label->SetTextRenderColor(Candidate.Color);
+        Label->SetWorldSize(LabelWorldSize);
         Label->SetWorldLocation(LabelLocation);
-        Label->SetWorldRotation((CameraLocation - LabelLocation).Rotation());
+        Label->SetWorldRotation(LabelRotation);
         Label->SetVisibility(true, true);
         Label->SetHiddenInGame(false, true);
+
+        if (BoldLabel != nullptr)
+        {
+            if (Candidate.bIsSnapTarget)
+            {
+                const FVector CameraRight = Camera->GetRightVector();
+                const FVector CameraUp = Camera->GetUpVector();
+                BoldLabel->SetText(FText::FromString(LabelText));
+                BoldLabel->SetTextRenderColor(Candidate.Color);
+                BoldLabel->SetWorldSize(LabelWorldSize);
+                BoldLabel->SetWorldLocation(LabelLocation + CameraRight * 1.5f + CameraUp * 1.5f);
+                BoldLabel->SetWorldRotation(LabelRotation);
+                BoldLabel->SetVisibility(true, true);
+                BoldLabel->SetHiddenInGame(false, true);
+            }
+            else
+            {
+                BoldLabel->SetVisibility(false, true);
+            }
+        }
+
+        NewVisiblePointLabelNumbers.Add(Candidate.PointNumber);
     }
+
+    LastVisiblePointLabelNumbers = MoveTemp(NewVisiblePointLabelNumbers);
 }
 
 bool ACSTopoSurveyPawn::IsPrecisionModeActive() const
