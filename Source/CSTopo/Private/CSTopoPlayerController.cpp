@@ -427,6 +427,7 @@ void ACSTopoPlayerController::HideHomeScreenAndEnterSurvey()
     if (ACSTopoSurveyPawn* SurveyPawn = Cast<ACSTopoSurveyPawn>(GetPawn()))
     {
         SurveyPawn->SetNavigationMode(ECSTopoNavigationMode::Walk);
+        SurveyPawn->RedrawMeasurementDebug();
     }
 }
 

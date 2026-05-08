@@ -323,6 +323,10 @@ FString MeasurementSourceLabel(ECSTopoMeasurementSource Source)
         return TEXT("RawPoint");
     case ECSTopoMeasurementSource::SurfaceFallback:
         return TEXT("SurfaceFallback");
+    case ECSTopoMeasurementSource::StoredPointSnap:
+        return TEXT("StoredPointSnap");
+    case ECSTopoMeasurementSource::LineVertexSnap:
+        return TEXT("LineVertexSnap");
     case ECSTopoMeasurementSource::InterpolatedPoints:
     default:
         return TEXT("InterpolatedPoints");
@@ -2400,6 +2404,134 @@ bool UCSTopoSurveySubsystem::SurveyPointToRenderLocation(const FVector& SurveyPo
     return true;
 }
 
+bool UCSTopoSurveySubsystem::FindSnapTargetFromView(const FVector& ViewOrigin, const FVector& ViewDirection, FCSTopoMeasurementPreview& Preview) const
+{
+    const FCSTopoPointCloudSource* Source = FindPointCloud(ActiveProject.ActivePointCloudId);
+    if (Source == nullptr || ActiveProject.Shots.IsEmpty())
+    {
+        return false;
+    }
+
+    const FVector Direction = ViewDirection.GetSafeNormal();
+    if (Direction.IsNearlyZero())
+    {
+        return false;
+    }
+
+    constexpr float SnapToleranceRenderUnits = 18.0f;
+    constexpr float MaxSnapDistanceRenderUnits = 2500000.0f;
+    const float SnapToleranceSq = FMath::Square(SnapToleranceRenderUnits);
+    auto IsGeneratedVertexSegment = [](ECSTopoFigureSegmentKind Kind)
+    {
+        return Kind == ECSTopoFigureSegmentKind::Line
+            || Kind == ECSTopoFigureSegmentKind::Rectangle
+            || Kind == ECSTopoFigureSegmentKind::OffsetLine
+            || Kind == ECSTopoFigureSegmentKind::JoinLine;
+    };
+
+    TMap<int32, const FCSTopoShotRecord*> ShotByNumber;
+    for (const FCSTopoShotRecord& Shot : ActiveProject.Shots)
+    {
+        ShotByNumber.Add(Shot.PointNumber, &Shot);
+    }
+
+    bool bFound = false;
+    double BestScore = TNumericLimits<double>::Max();
+    FVector BestRenderLocation = FVector::ZeroVector;
+    FVector BestSurveyNez = FVector::ZeroVector;
+    ECSTopoMeasurementSnapKind BestSnapKind = ECSTopoMeasurementSnapKind::None;
+    int32 BestPointNumber = INDEX_NONE;
+
+    auto ConsiderCandidate = [&](const FVector& SurveyNez, ECSTopoMeasurementSnapKind SnapKind, int32 PointNumber)
+    {
+        FVector RenderLocation = FVector::ZeroVector;
+        if (!SurveyPointToRenderLocation(SurveyNez, RenderLocation))
+        {
+            return;
+        }
+
+        const FVector ToCandidate = RenderLocation - ViewOrigin;
+        const double Along = FVector::DotProduct(ToCandidate, Direction);
+        if (Along <= 0.0 || Along > MaxSnapDistanceRenderUnits)
+        {
+            return;
+        }
+
+        const FVector ClosestOnRay = ViewOrigin + Direction * static_cast<float>(Along);
+        const double DistanceSq = FVector::DistSquared(RenderLocation, ClosestOnRay);
+        if (DistanceSq > SnapToleranceSq)
+        {
+            return;
+        }
+
+        const double Score = DistanceSq + Along * 0.00001;
+        if (Score >= BestScore)
+        {
+            return;
+        }
+
+        bFound = true;
+        BestScore = Score;
+        BestRenderLocation = RenderLocation;
+        BestSurveyNez = SurveyNez;
+        BestSnapKind = SnapKind;
+        BestPointNumber = PointNumber;
+    };
+
+    for (const FCSTopoShotRecord& Shot : ActiveProject.Shots)
+    {
+        ConsiderCandidate(FVector(Shot.Northing, Shot.Easting, Shot.Elevation), ECSTopoMeasurementSnapKind::StoredPoint, Shot.PointNumber);
+    }
+
+    for (const FCSTopoFigureSegmentRecord& Segment : ActiveProject.FigureSegments)
+    {
+        if (IsGeneratedVertexSegment(Segment.SegmentKind))
+        {
+            for (const FVector& SurveyPoint : Segment.SurveyPoints)
+            {
+                ConsiderCandidate(SurveyPoint, ECSTopoMeasurementSnapKind::LineVertex, INDEX_NONE);
+            }
+            continue;
+        }
+
+        for (int32 PointNumber : Segment.PointNumbers)
+        {
+            if (const FCSTopoShotRecord* const* Shot = ShotByNumber.Find(PointNumber))
+            {
+                ConsiderCandidate(FVector((*Shot)->Northing, (*Shot)->Easting, (*Shot)->Elevation), ECSTopoMeasurementSnapKind::StoredPoint, (*Shot)->PointNumber);
+            }
+        }
+    }
+
+    if (!bFound)
+    {
+        return false;
+    }
+
+    Preview.bMeasurable = true;
+    Preview.bUsesSnap = true;
+    Preview.SnapKind = BestSnapKind;
+    Preview.SnapPointNumber = BestPointNumber;
+    Preview.RenderLocation = BestRenderLocation;
+    Preview.SurveyNez = BestSurveyNez;
+    Preview.FitType = BestSnapKind == ECSTopoMeasurementSnapKind::StoredPoint ? TEXT("StoredPointSnap") : TEXT("LineVertexSnap");
+    Preview.Message = BestSnapKind == ECSTopoMeasurementSnapKind::StoredPoint && BestPointNumber != INDEX_NONE
+        ? FString::Printf(
+            TEXT("Snap: P%d | N %.3f E %.3f Z %.3f %s"),
+            BestPointNumber,
+            BestSurveyNez.X,
+            BestSurveyNez.Y,
+            BestSurveyNez.Z,
+            *Source->LinearUnitName)
+        : FString::Printf(
+            TEXT("Snap: line vertex | N %.3f E %.3f Z %.3f %s"),
+            BestSurveyNez.X,
+            BestSurveyNez.Y,
+            BestSurveyNez.Z,
+            *Source->LinearUnitName);
+    return true;
+}
+
 void UCSTopoSurveySubsystem::UpdateSurveyMapPose(const FVector& CameraRenderLocation, const FVector& ViewDirection)
 {
     LastSurveyMapRenderLocation = CameraRenderLocation;
@@ -2510,6 +2642,11 @@ bool UCSTopoSurveySubsystem::PreviewMeasurementAtView(const FVector& ViewOrigin,
     {
         Preview.Message = TEXT("No active point cloud is selected.");
         return false;
+    }
+
+    if (FindSnapTargetFromView(ViewOrigin, ViewDirection, Preview))
+    {
+        return true;
     }
 
     FString SurfaceError;
@@ -3047,6 +3184,78 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
     const FString MeasurementControlParameter = PendingControlParameter;
     const bool bStartsNewLine = MeasurementControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase) || MeasurementControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase);
     const bool bJoinLinework = !MeasurementControlCode.Equals(TEXT("IG"), ESearchCase::IgnoreCase);
+
+    if (Preview.bUsesSnap)
+    {
+        ApplyControlBeforeShot(BaseCode, MeasurementControlCode);
+        Shot = UCSTopoProjectLibrary::AddFittedShot(
+            ActiveProject,
+            MeasurementCode,
+            Preview.SurveyNez.X,
+            Preview.SurveyNez.Y,
+            Preview.SurveyNez.Z,
+            0.0,
+            Source->SourceId,
+            MeasurementControlParameter,
+            bJoinLinework);
+        RenderLocation = Preview.RenderLocation;
+
+        if (FCSTopoShotRecord* StoredShot = ActiveProject.Shots.FindByPredicate([PointNumber = Shot.PointNumber](const FCSTopoShotRecord& Candidate)
+        {
+            return Candidate.PointNumber == PointNumber;
+        }))
+        {
+            StoredShot->ViewLocation = ViewOrigin;
+            StoredShot->FitType = Preview.FitType;
+            StoredShot->MeasurementSource = Preview.SnapKind == ECSTopoMeasurementSnapKind::StoredPoint
+                ? ECSTopoMeasurementSource::StoredPointSnap
+                : ECSTopoMeasurementSource::LineVertexSnap;
+            StoredShot->AuditJson = Preview.SnapKind == ECSTopoMeasurementSnapKind::StoredPoint && Preview.SnapPointNumber != INDEX_NONE
+                ? FString::Printf(
+                    TEXT("{\"measurementSource\":\"StoredPointSnap\",\"targetPointNumber\":%d,\"renderHit\":[%.3f,%.3f,%.3f],\"sourceXyz\":[%.3f,%.3f,%.3f],\"linearUnit\":\"%s\",\"linearUnitToMeters\":%.12f}"),
+                    Preview.SnapPointNumber,
+                    Preview.RenderLocation.X,
+                    Preview.RenderLocation.Y,
+                    Preview.RenderLocation.Z,
+                    Preview.SurveyNez.Y,
+                    Preview.SurveyNez.X,
+                    Preview.SurveyNez.Z,
+                    *Source->LinearUnitName,
+                    Source->LinearUnitToMeters)
+                : FString::Printf(
+                    TEXT("{\"measurementSource\":\"LineVertexSnap\",\"renderHit\":[%.3f,%.3f,%.3f],\"sourceXyz\":[%.3f,%.3f,%.3f],\"linearUnit\":\"%s\",\"linearUnitToMeters\":%.12f}"),
+                    Preview.RenderLocation.X,
+                    Preview.RenderLocation.Y,
+                    Preview.RenderLocation.Z,
+                    Preview.SurveyNez.Y,
+                    Preview.SurveyNez.X,
+                    Preview.SurveyNez.Z,
+                    *Source->LinearUnitName,
+                    Source->LinearUnitToMeters);
+            Shot = *StoredShot;
+        }
+
+        ApplyControlAfterShot(Shot);
+        ErrorMessage = Preview.SnapKind == ECSTopoMeasurementSnapKind::StoredPoint && Preview.SnapPointNumber != INDEX_NONE
+            ? FString::Printf(
+                TEXT("Shot %d %s snapped to P%d N %.3f E %.3f Z %.3f %s"),
+                Shot.PointNumber,
+                *Shot.Code,
+                Preview.SnapPointNumber,
+                Shot.Northing,
+                Shot.Easting,
+                Shot.Elevation,
+                *Source->LinearUnitName)
+            : FString::Printf(
+                TEXT("Shot %d %s snapped to line vertex N %.3f E %.3f Z %.3f %s"),
+                Shot.PointNumber,
+                *Shot.Code,
+                Shot.Northing,
+                Shot.Easting,
+                Shot.Elevation,
+                *Source->LinearUnitName);
+        return true;
+    }
 
     if (Preview.bUsesDerivedSurface)
     {

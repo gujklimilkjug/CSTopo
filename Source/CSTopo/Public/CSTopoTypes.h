@@ -48,7 +48,9 @@ enum class ECSTopoMeasurementSource : uint8
     DerivedSurface UMETA(DisplayName = "Derived Surface"),
     RawPoint UMETA(DisplayName = "Raw Point"),
     InterpolatedPoints UMETA(DisplayName = "Interpolated Nearby Points"),
-    SurfaceFallback UMETA(DisplayName = "Surface Fallback")
+    SurfaceFallback UMETA(DisplayName = "Surface Fallback"),
+    StoredPointSnap UMETA(DisplayName = "Stored Point Snap"),
+    LineVertexSnap UMETA(DisplayName = "Line Vertex Snap")
 };
 
 UENUM(BlueprintType)

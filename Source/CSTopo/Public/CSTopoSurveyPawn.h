@@ -8,6 +8,15 @@
 class UCameraComponent;
 class UCapsuleComponent;
 class UCharacterMovementComponent;
+class UProceduralMeshComponent;
+class UTextRenderComponent;
+
+struct FCSTopoRenderedShotMarker
+{
+    int32 PointNumber = INDEX_NONE;
+    FVector RenderLocation = FVector::ZeroVector;
+    FColor Color = FColor::Yellow;
+};
 
 UCLASS()
 class CSTOPO_API ACSTopoSurveyPawn : public ACharacter
@@ -137,6 +146,9 @@ private:
     float GetCurrentFlyBaseSpeed() const;
     float GetPrecisionMovementScalar() const;
     FColor GetShotColor(const FCSTopoShotRecord& Shot) const;
+    void EnsureSurveyVisualization();
+    void RebuildPointMarkerMesh(const TArray<FCSTopoRenderedShotMarker>& ShotMarkers);
+    void UpdatePointLabels();
 
     bool bSprintHeld = false;
     uint64 LastMovementAxisFrame = 0;
@@ -154,6 +166,23 @@ private:
     float CurrentLookSensitivityScalar = 1.0f;
     int32 CurrentFlySpeedBandIndex = 3;
     bool bPrecisionModeActive = false;
+    bool bHasHoverSnap = false;
+    int32 HoverSnapPointNumber = INDEX_NONE;
+    FVector HoverSnapRenderLocation = FVector::ZeroVector;
     FString LastFocusedPointCloudId;
     TMap<FGuid, FVector> LastRenderLocationByFigure;
+    TArray<FCSTopoRenderedShotMarker> RenderedShotMarkers;
+    TSet<int32> LastVisiblePointLabelNumbers;
+
+    UPROPERTY()
+    TObjectPtr<AActor> SurveyVisualizationActor;
+
+    UPROPERTY()
+    TObjectPtr<UProceduralMeshComponent> PointMarkerMeshComponent;
+
+    UPROPERTY()
+    TArray<TObjectPtr<UTextRenderComponent>> PointLabelComponents;
+
+    UPROPERTY()
+    TArray<TObjectPtr<UTextRenderComponent>> PointLabelBoldComponents;
 };
