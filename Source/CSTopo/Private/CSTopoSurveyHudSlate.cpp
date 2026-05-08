@@ -1,6 +1,7 @@
 #include "CSTopoSurveyHudSlate.h"
 
 #include "CSTopoSurveySubsystem.h"
+#include "Brushes/SlateImageBrush.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
@@ -14,7 +15,7 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSeparator.h"
-#include "Widgets/Layout/SWrapBox.h"
+#include "Widgets/Layout/SUniformGridPanel.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -398,25 +399,36 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
     OnUndo = InArgs._OnUndo;
     ActionStatusMessage = TEXT("Tab focuses the collector. Ctrl+Tab opens the point-cloud manager.");
 
+    const FString LogoPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("Logo"), TEXT("CSTopo_Logo1.png"));
+    if (FPaths::FileExists(LogoPath))
+    {
+        LogoBrush = MakeShared<FSlateImageBrush>(LogoPath, FVector2D(64.0f, 64.0f));
+    }
+    else
+    {
+        LogoBrush.Reset();
+    }
+
     ChildSlot
     [
         SNew(SOverlay)
         + SOverlay::Slot()
+        .HAlign(HAlign_Right)
+        .VAlign(VAlign_Top)
+        .Padding(FMargin(0.0f, 16.0f, 16.0f, 0.0f))
         [
-            SNew(SHorizontalBox)
-            + SHorizontalBox::Slot()
-            .AutoWidth()
-            .Padding(FMargin(16.0f))
+            SNew(SBox)
+            .WidthOverride(520.0f)
             [
                 SNew(SVerticalBox)
-                // Top Header Row
                 + SVerticalBox::Slot()
                 .AutoHeight()
                 .Padding(FMargin(0.0f, 0.0f, 0.0f, 12.0f))
                 [
                     SNew(SBorder)
-                    .Padding(FMargin(16.0f, 16.0f))
-                    .BorderBackgroundColor(FLinearColor(0.06f, 0.08f, 0.10f, 0.95f))
+                    .Padding(FMargin(16.0f))
+                    .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                    .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
                     [
                         SNew(SHorizontalBox)
                         + SHorizontalBox::Slot()
@@ -424,17 +436,17 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                         .VAlign(VAlign_Center)
                         [
                             SNew(SBox)
-                            .WidthOverride(48.0f)
-                            .HeightOverride(48.0f)
+                            .WidthOverride(72.0f)
+                            .HeightOverride(72.0f)
                             [
                                 SNew(SImage)
-                                .Image(FCoreStyle::Get().GetBrush("WhiteBrush"))
-                                .ColorAndOpacity(FSlateColor(FLinearColor(0.2f, 0.2f, 0.2f, 1.0f)))
+                                .Image(LogoBrush.IsValid() ? LogoBrush.Get() : FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                                .ColorAndOpacity(FSlateColor(FLinearColor::White))
                             ]
                         ]
                         + SHorizontalBox::Slot()
                         .FillWidth(1.0f)
-                        .Padding(FMargin(20.0f, 0.0f, 0.0f, 0.0f))
+                        .Padding(FMargin(18.0f, 0.0f, 0.0f, 0.0f))
                         .VAlign(VAlign_Center)
                         [
                             SNew(SVerticalBox)
@@ -443,24 +455,24 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                             [
                                 SNew(STextBlock)
                                 .Text(this, &SCSTopoSurveyHud::GetProjectNameText)
-                                .Font(FCoreStyle::GetDefaultFontStyle("Bold", 16))
+                                .Font(FCoreStyle::GetDefaultFontStyle("Bold", 22))
                                 .ColorAndOpacity(FSlateColor(FLinearColor::White))
                             ]
                             + SVerticalBox::Slot()
                             .AutoHeight()
-                            .Padding(FMargin(0.0f, 2.0f, 0.0f, 0.0f))
+                            .Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
                             [
                                 SNew(STextBlock)
                                 .Text(this, &SCSTopoSurveyHud::GetActiveSourceText)
-                                .ColorAndOpacity(FSlateColor(FLinearColor(0.7f, 0.75f, 0.8f, 1.0f)))
+                                .ColorAndOpacity(FSlateColor(FLinearColor(0.76f, 0.84f, 0.90f, 1.0f)))
                             ]
                             + SVerticalBox::Slot()
                             .AutoHeight()
-                            .Padding(FMargin(0.0f, 2.0f, 0.0f, 0.0f))
+                            .Padding(FMargin(0.0f, 3.0f, 0.0f, 0.0f))
                             [
                                 SNew(STextBlock)
                                 .Text(this, &SCSTopoSurveyHud::GetNavigationModeText)
-                                .ColorAndOpacity(FSlateColor(FLinearColor(0.7f, 0.75f, 0.8f, 1.0f)))
+                                .ColorAndOpacity(FSlateColor(FLinearColor(0.88f, 0.94f, 1.0f, 1.0f)))
                             ]
                         ]
                         + SHorizontalBox::Slot()
@@ -468,8 +480,8 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                         .VAlign(VAlign_Center)
                         [
                             SNew(SBorder)
-                            .Padding(FMargin(16.0f, 12.0f))
-                            .BorderBackgroundColor(FLinearColor(0.12f, 0.14f, 0.16f, 1.0f))
+                            .Padding(FMargin(14.0f, 10.0f))
+                            .BorderBackgroundColor(FLinearColor(0.018f, 0.024f, 0.032f, 1.0f))
                             [
                                 SNew(SVerticalBox)
                                 + SVerticalBox::Slot()
@@ -487,283 +499,212 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                                 .Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
                                 [
                                     SNew(STextBlock)
-                                    .Text_Lambda([this]() {
+                                    .Text_Lambda([this]()
+                                    {
                                         const UCSTopoSurveySubsystem* Survey = SurveySubsystem.Get();
                                         const int32 NextPoint = Survey != nullptr ? Survey->ActiveProject.NextPointNumber : 1;
                                         return FText::FromString(FString::Printf(TEXT("%d"), NextPoint));
                                     })
                                     .ColorAndOpacity(FSlateColor(FLinearColor(0.96f, 0.82f, 0.25f, 1.0f)))
-                                    .Font(FCoreStyle::GetDefaultFontStyle("Bold", 18))
+                                    .Font(FCoreStyle::GetDefaultFontStyle("Bold", 34))
                                 ]
                             ]
                         ]
                     ]
                 ]
-                // Main Columns
                 + SVerticalBox::Slot()
                 .AutoHeight()
+                .Padding(FMargin(0.0f, 0.0f, 0.0f, 12.0f))
+                [
+                    SNew(SBorder)
+                    .Padding(FMargin(16.0f))
+                    .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                    .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
+                    [
+                        SNew(SVerticalBox)
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        [
+                            BuildSectionHeader(TEXT("ACTIVE CODE"))
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 16.0f, 0.0f, 0.0f))
+                        [
+                            SNew(SHorizontalBox)
+                            + SHorizontalBox::Slot()
+                            .FillWidth(1.0f)
+                            .VAlign(VAlign_Center)
+                            [
+                                SNew(SOverlay)
+                                + SOverlay::Slot()
+                                [
+                                    SNew(STextBlock)
+                                    .Text(this, &SCSTopoSurveyHud::GetActiveCodeText)
+                                    .Font(FCoreStyle::GetDefaultFontStyle("Bold", 42))
+                                    .ColorAndOpacity(FSlateColor(FLinearColor::White))
+                                    .Visibility_Lambda([this]()
+                                    {
+                                        return bCollectorInteractive ? EVisibility::Collapsed : EVisibility::HitTestInvisible;
+                                    })
+                                ]
+                                + SOverlay::Slot()
+                                [
+                                    SAssignNew(CodeTextBox, SEditableTextBox)
+                                    .HintText(FText::FromString(TEXT("Code")))
+                                    .Font(FCoreStyle::GetDefaultFontStyle("Bold", 42))
+                                    .Visibility_Lambda([this]()
+                                    {
+                                        return bCollectorInteractive ? EVisibility::Visible : EVisibility::Collapsed;
+                                    })
+                                    .OnTextChanged(this, &SCSTopoSurveyHud::HandleCodeTextChanged)
+                                    .OnTextCommitted(this, &SCSTopoSurveyHud::HandleCodeTextCommitted)
+                                ]
+                            ]
+                            + SHorizontalBox::Slot()
+                            .AutoWidth()
+                            .VAlign(VAlign_Center)
+                            [
+                                SNew(SBorder)
+                                .Padding(FMargin(24.0f, 20.0f))
+                                .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                                .BorderBackgroundColor(this, &SCSTopoSurveyHud::GetActiveCodeSwatchColor)
+                                [
+                                    SNullWidget::NullWidget
+                                ]
+                            ]
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 16.0f, 0.0f, 0.0f))
+                        [
+                            SNew(STextBlock)
+                            .Text(this, &SCSTopoSurveyHud::GetActivePointTypeText)
+                            .ColorAndOpacity(FSlateColor(FLinearColor(0.92f, 0.95f, 1.0f, 1.0f)))
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
+                        [
+                            SNew(STextBlock)
+                            .Text(this, &SCSTopoSurveyHud::GetActiveCodeDetailText)
+                            .ColorAndOpacity(FSlateColor(FLinearColor(0.92f, 0.95f, 1.0f, 1.0f)))
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 18.0f, 0.0f, 0.0f))
+                        [
+                            SAssignNew(CodeSearchBox, SEditableTextBox)
+                            .HintText(FText::FromString(TEXT("Search code...")))
+                            .Visibility_Lambda([this]()
+                            {
+                                return bCollectorInteractive ? EVisibility::Visible : EVisibility::HitTestInvisible;
+                            })
+                            .OnTextChanged(this, &SCSTopoSurveyHud::HandleCodeFilterChanged)
+                            .OnTextCommitted(this, &SCSTopoSurveyHud::HandleCodeFilterCommitted)
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 12.0f, 0.0f, 0.0f))
+                        [
+                            SNew(SButton)
+                            .Text(FText::FromString(TEXT("Collect Shot")))
+                            .HAlign(HAlign_Center)
+                            .VAlign(VAlign_Center)
+                            .IsEnabled_Lambda([this]() { return bCollectorInteractive; })
+                            .ButtonColorAndOpacity(FLinearColor(0.14f, 0.44f, 0.28f, 1.0f))
+                            .OnClicked(this, &SCSTopoSurveyHud::HandleCollectShot)
+                        ]
+                    ]
+                ]
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(FMargin(0.0f, 0.0f, 0.0f, 12.0f))
                 [
                     SNew(SHorizontalBox)
-                    // Left Column
                     + SHorizontalBox::Slot()
                     .AutoWidth()
                     .Padding(FMargin(0.0f, 0.0f, 12.0f, 0.0f))
                     [
                         SNew(SBox)
-                        .WidthOverride(420.0f)
+                        .WidthOverride(170.0f)
+                        .HeightOverride(420.0f)
                         [
-                            SNew(SVerticalBox)
-                            // ACTIVE CODE BOX
-                            + SVerticalBox::Slot()
-                            .AutoHeight()
-                            .Padding(FMargin(0.0f, 0.0f, 0.0f, 12.0f))
+                            SNew(SBorder)
+                            .Padding(FMargin(14.0f))
+                            .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                            .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
                             [
-                                SNew(SBorder)
-                                .Padding(FMargin(16.0f))
-                                .BorderBackgroundColor(FLinearColor(0.06f, 0.08f, 0.10f, 0.95f))
+                                SNew(SVerticalBox)
+                                + SVerticalBox::Slot()
+                                .AutoHeight()
                                 [
-                                    SNew(SVerticalBox)
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    [
-                                        BuildSectionHeader(TEXT("ACTIVE CODE"))
-                                    ]
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    .Padding(FMargin(0.0f, 16.0f, 0.0f, 0.0f))
-                                    [
-                                        SNew(SHorizontalBox)
-                                        + SHorizontalBox::Slot()
-                                        .FillWidth(1.0f)
-                                        .VAlign(VAlign_Center)
-                                        [
-                                            SNew(SOverlay)
-                                            + SOverlay::Slot()
-                                            [
-                                                SNew(STextBlock)
-                                                .Text(this, &SCSTopoSurveyHud::GetActiveCodeText)
-                                                .Font(FCoreStyle::GetDefaultFontStyle("Bold", 28))
-                                                .ColorAndOpacity(FSlateColor(FLinearColor::White))
-                                                .Visibility_Lambda([this]()
-                                                {
-                                                    return bCollectorInteractive ? EVisibility::Collapsed : EVisibility::HitTestInvisible;
-                                                })
-                                            ]
-                                            + SOverlay::Slot()
-                                            [
-                                                SAssignNew(CodeTextBox, SEditableTextBox)
-                                                .HintText(FText::FromString(TEXT("Code")))
-                                                .Font(FCoreStyle::GetDefaultFontStyle("Bold", 28))
-                                                .Visibility_Lambda([this]()
-                                                {
-                                                    return bCollectorInteractive ? EVisibility::Visible : EVisibility::Collapsed;
-                                                })
-                                                .OnTextChanged(this, &SCSTopoSurveyHud::HandleCodeTextChanged)
-                                                .OnTextCommitted(this, &SCSTopoSurveyHud::HandleCodeTextCommitted)
-                                            ]
-                                        ]
-                                        + SHorizontalBox::Slot()
-                                        .AutoWidth()
-                                        .VAlign(VAlign_Center)
-                                        [
-                                            SNew(SBorder)
-                                            .Padding(FMargin(16.0f, 16.0f))
-                                            .BorderBackgroundColor(this, &SCSTopoSurveyHud::GetActiveCodeSwatchColor)
-                                            [
-                                                SNullWidget::NullWidget
-                                            ]
-                                        ]
-                                    ]
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    .Padding(FMargin(0.0f, 16.0f, 0.0f, 0.0f))
-                                    [
-                                        SNew(STextBlock)
-                                        .Text(this, &SCSTopoSurveyHud::GetActivePointTypeText)
-                                        .ColorAndOpacity(FSlateColor(FLinearColor(0.85f, 0.9f, 0.96f, 1.0f)))
-                                    ]
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    .Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
-                                    [
-                                        SNew(STextBlock)
-                                        .Text(this, &SCSTopoSurveyHud::GetActiveCodeDetailText)
-                                        .ColorAndOpacity(FSlateColor(FLinearColor(0.68f, 0.76f, 0.84f, 1.0f)))
-                                    ]
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    .Padding(FMargin(0.0f, 16.0f, 0.0f, 0.0f))
-                                    [
-                                        SAssignNew(CodeSearchBox, SEditableTextBox)
-                                        .HintText(FText::FromString(TEXT("Search code...")))
-                                        .Visibility_Lambda([this]()
-                                        {
-                                            return bCollectorInteractive ? EVisibility::Visible : EVisibility::HitTestInvisible;
-                                        })
-                                        .OnTextChanged(this, &SCSTopoSurveyHud::HandleCodeFilterChanged)
-                                        .OnTextCommitted(this, &SCSTopoSurveyHud::HandleCodeFilterCommitted)
-                                    ]
+                                    BuildSectionHeader(TEXT("CONTROL CODES"))
                                 ]
-                            ]
-                            // CONTROL CODES BOX
-                            + SVerticalBox::Slot()
-                            .AutoHeight()
-                            .Padding(FMargin(0.0f, 0.0f, 0.0f, 12.0f))
-                            [
-                                SNew(SBorder)
-                                .Padding(FMargin(16.0f))
-                                .BorderBackgroundColor(FLinearColor(0.06f, 0.08f, 0.10f, 0.95f))
+                                + SVerticalBox::Slot()
+                                .FillHeight(1.0f)
+                                .Padding(FMargin(0.0f, 12.0f, 0.0f, 0.0f))
                                 [
-                                    SNew(SVerticalBox)
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    [
-                                        BuildSectionHeader(TEXT("CONTROL CODES"))
-                                    ]
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    .Padding(FMargin(0.0f, 12.0f, 0.0f, 0.0f))
+                                    SNew(SScrollBox)
+                                    .ScrollBarVisibility(EVisibility::Collapsed)
+                                    + SScrollBox::Slot()
                                     [
                                         SAssignNew(ControlCodeContainer, SVerticalBox)
                                     ]
                                 ]
                             ]
-                            // ACTIONS BOX
-                            + SVerticalBox::Slot()
-                            .AutoHeight()
+                        ]
+                    ]
+                    + SHorizontalBox::Slot()
+                    .FillWidth(1.0f)
+                    [
+                        SNew(SBox)
+                        .HeightOverride(420.0f)
+                        [
+                            SNew(SBorder)
+                            .Padding(FMargin(16.0f))
+                            .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                            .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
                             [
                                 SNew(SVerticalBox)
                                 + SVerticalBox::Slot()
                                 .AutoHeight()
-                                .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
                                 [
-                                    SNew(SButton)
-                                    .Text(FText::FromString(TEXT("Collect Shot")))
-                                    .HAlign(HAlign_Center)
-                                    .VAlign(VAlign_Center)
-                                    .IsEnabled_Lambda([this]() { return bCollectorInteractive; })
-                                    .ButtonColorAndOpacity(FLinearColor(0.14f, 0.44f, 0.28f, 1.0f))
-                                    .OnClicked(this, &SCSTopoSurveyHud::HandleCollectShot)
+                                    BuildSectionHeader(TEXT("MINIMAP"))
                                 ]
                                 + SVerticalBox::Slot()
-                                .AutoHeight()
-                                .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
+                                .FillHeight(1.0f)
+                                .Padding(FMargin(0.0f, 12.0f, 0.0f, 0.0f))
                                 [
-                                    SNew(SHorizontalBox)
-                                    + SHorizontalBox::Slot()
-                                    .FillWidth(0.5f)
-                                    .Padding(FMargin(0.0f, 0.0f, 4.0f, 0.0f))
-                                    [
-                                        SNew(SButton)
-                                        .Text(FText::FromString(TEXT("Back")))
-                                        .HAlign(HAlign_Center)
-                                        .VAlign(VAlign_Center)
-                                        .IsEnabled_Lambda([this]() { return bCollectorInteractive; })
-                                        .ButtonColorAndOpacity(FLinearColor(0.15f, 0.17f, 0.20f, 1.0f))
-                                        .OnClicked(this, &SCSTopoSurveyHud::HandleUndo)
-                                    ]
-                                    + SHorizontalBox::Slot()
-                                    .FillWidth(0.5f)
-                                    .Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
-                                    [
-                                        SNew(SButton)
-                                        .Text(FText::FromString(TEXT("Clear")))
-                                        .HAlign(HAlign_Center)
-                                        .VAlign(VAlign_Center)
-                                        .IsEnabled_Lambda([this]() { return bCollectorInteractive; })
-                                        .ButtonColorAndOpacity(FLinearColor(0.35f, 0.15f, 0.15f, 1.0f))
-                                        .OnClicked_Lambda([this]() { ActionStatusMessage = TEXT("Ready."); return FReply::Handled(); })
-                                    ]
-                                ]
-                                + SVerticalBox::Slot()
-                                .AutoHeight()
-                                [
-                                    SNew(SBorder)
-                                    .Padding(FMargin(12.0f, 12.0f))
-                                    .BorderBackgroundColor(FLinearColor(0.06f, 0.08f, 0.10f, 0.95f))
-                                    [
-                                        SNew(STextBlock)
-                                        .Text(this, &SCSTopoSurveyHud::GetActionStatusText)
-                                        .ColorAndOpacity(FSlateColor(FLinearColor(0.88f, 0.9f, 0.96f, 1.0f)))
-                                    ]
-                                ]
-                            ]
-                        ]
-                    ]
-                    // Right Column
-                    + SHorizontalBox::Slot()
-                    .AutoWidth()
-                    [
-                        SNew(SBox)
-                        .WidthOverride(420.0f)
-                        [
-                            SNew(SVerticalBox)
-                            // MINIMAP BOX
-                            + SVerticalBox::Slot()
-                            .AutoHeight()
-                            .Padding(FMargin(0.0f, 0.0f, 0.0f, 12.0f))
-                            [
-                                SNew(SBorder)
-                                .Padding(FMargin(16.0f))
-                                .BorderBackgroundColor(FLinearColor(0.06f, 0.08f, 0.10f, 0.95f))
-                                [
-                                    SNew(SVerticalBox)
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    [
-                                        BuildSectionHeader(TEXT("MINIMAP"))
-                                    ]
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    .Padding(FMargin(0.0f, 12.0f, 0.0f, 0.0f))
-                                    [
-                                        SNew(SBox)
-                                        .HeightOverride(420.0f)
-                                        [
-                                            SNew(SCSTopoSurveyMiniMap)
-                                            .SurveySubsystem(SurveySubsystem)
-                                        ]
-                                    ]
-                                ]
-                            ]
-                            // RECENT SHOTS BOX
-                            + SVerticalBox::Slot()
-                            .AutoHeight()
-                            [
-                                SNew(SBorder)
-                                .Padding(FMargin(16.0f))
-                                .BorderBackgroundColor(FLinearColor(0.06f, 0.08f, 0.10f, 0.95f))
-                                [
-                                    SNew(SVerticalBox)
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    [
-                                        BuildSectionHeader(TEXT("RECENT"))
-                                    ]
-                                    + SVerticalBox::Slot()
-                                    .AutoHeight()
-                                    .Padding(FMargin(0.0f, 12.0f, 0.0f, 0.0f))
-                                    [
-                                        SAssignNew(RecentShotBox, SVerticalBox)
-                                    ]
+                                    SNew(SCSTopoSurveyMiniMap)
+                                    .SurveySubsystem(SurveySubsystem)
                                 ]
                             ]
                         ]
                     ]
                 ]
-            ]
-        ]
-        // Bottom Footer
-        + SOverlay::Slot()
-        .VAlign(VAlign_Bottom)
-        [
-            SNew(SBorder)
-            .Padding(FMargin(16.0f, 16.0f))
-            .BorderBackgroundColor(FLinearColor(0.06f, 0.08f, 0.10f, 0.95f))
-            [
-                SNew(STextBlock)
-                .Text(this, &SCSTopoSurveyHud::GetHoverText)
-                .ColorAndOpacity(this, &SCSTopoSurveyHud::GetHoverColor)
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                [
+                    SNew(SBorder)
+                    .Padding(FMargin(16.0f))
+                    .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                    .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
+                    [
+                        SNew(SVerticalBox)
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        [
+                            BuildSectionHeader(TEXT("RECENT"))
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 12.0f, 0.0f, 0.0f))
+                        [
+                            SAssignNew(RecentShotBox, SVerticalBox)
+                        ]
+                    ]
+                ]
             ]
         ]
     ];
@@ -909,46 +850,33 @@ void SCSTopoSurveyHud::RefreshControlCodes()
         Categories[Category].Add(Definition);
     }
 
+    TArray<FCSTopoControlCodeDefinition> OrderedDefinitions;
     for (const FString& CatName : CategoryOrder)
     {
-        const TArray<FCSTopoControlCodeDefinition>& Defs = Categories[CatName];
-        if (Defs.IsEmpty()) continue;
+        OrderedDefinitions.Append(Categories[CatName]);
+    }
 
-        TSharedPtr<SWrapBox> CatWrapBox;
+    TSharedPtr<SUniformGridPanel> ControlCodeGrid;
+    ControlCodeContainer->AddSlot()
+    .AutoHeight()
+    [
+        SAssignNew(ControlCodeGrid, SUniformGridPanel)
+        .SlotPadding(FMargin(0.0f, 0.0f, 6.0f, 6.0f))
+    ];
 
-        ControlCodeContainer->AddSlot()
-        .AutoHeight()
-        .Padding(FMargin(0.0f, 0.0f, 0.0f, 12.0f))
+    constexpr int32 ControlCodeGridColumns = 2;
+    for (int32 DefIndex = 0; DefIndex < OrderedDefinitions.Num(); ++DefIndex)
+    {
+        const FCSTopoControlCodeDefinition& Def = OrderedDefinitions[DefIndex];
+        ControlCodeGrid->AddSlot(DefIndex % ControlCodeGridColumns, DefIndex / ControlCodeGridColumns)
         [
-            SNew(SVerticalBox)
-            + SVerticalBox::Slot()
-            .AutoHeight()
-            .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
+            SNew(SBox)
+            .WidthOverride(60.0f)
+            .HeightOverride(34.0f)
             [
-                SNew(STextBlock)
-                .Text(FText::FromString(CatName))
-                .ColorAndOpacity(FSlateColor(FLinearColor(0.4f, 0.6f, 0.8f, 1.0f)))
-                .Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
-            ]
-            + SVerticalBox::Slot()
-            .AutoHeight()
-            [
-                SAssignNew(CatWrapBox, SWrapBox)
+                BuildControlCodeButton(Def)
             ]
         ];
-
-        for (const FCSTopoControlCodeDefinition& Def : Defs)
-        {
-            CatWrapBox->AddSlot()
-            .Padding(FMargin(0.0f, 0.0f, 8.0f, 8.0f))
-            [
-                SNew(SBox)
-                .MinDesiredWidth(60.0f)
-                [
-                    BuildControlCodeButton(Def)
-                ]
-            ];
-        }
     }
 }
 

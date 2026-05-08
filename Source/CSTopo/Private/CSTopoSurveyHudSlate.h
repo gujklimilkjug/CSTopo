@@ -6,7 +6,7 @@
 
 class SEditableTextBox;
 class SVerticalBox;
-class SWrapBox;
+struct FSlateImageBrush;
 class UCSTopoSurveySubsystem;
 struct FCSTopoControlCodeDefinition;
 
@@ -44,6 +44,7 @@ private:
     TSharedPtr<SEditableTextBox> CodeSearchBox;
     TSharedPtr<SVerticalBox> ControlCodeContainer;
     TSharedPtr<SVerticalBox> RecentShotBox;
+    TSharedPtr<FSlateImageBrush> LogoBrush;
 
     FString ActionStatusMessage;
     FString CodeFilterText;
