@@ -42,8 +42,7 @@ private:
 
     TSharedPtr<SEditableTextBox> CodeTextBox;
     TSharedPtr<SEditableTextBox> CodeSearchBox;
-    TSharedPtr<SWrapBox> QuickCodeBox;
-    TSharedPtr<SWrapBox> ControlCodeBox;
+    TSharedPtr<SVerticalBox> ControlCodeContainer;
     TSharedPtr<SVerticalBox> RecentShotBox;
 
     FString ActionStatusMessage;
@@ -59,13 +58,11 @@ private:
     bool bCollectorInteractive = false;
 
     void RefreshDynamicContent();
-    void RefreshQuickCodes();
     void RefreshControlCodes();
     void RefreshRecentShots();
     void SyncCodeText();
 
     TSharedRef<SWidget> BuildSectionHeader(const FString& Label) const;
-    TSharedRef<SWidget> BuildQuickCodeButton(const FString& Code, const FLinearColor& Color, bool bIsActive);
     TSharedRef<SWidget> BuildControlCodeButton(const FCSTopoControlCodeDefinition& Definition);
     TSharedRef<SWidget> BuildCodeCategoryLabel(const FString& Category) const;
 
