@@ -41,11 +41,21 @@ struct FCSTopoLoadedSurface
     }
 };
 
+enum class ECSTopoMeasurementSnapKind : uint8
+{
+    None,
+    StoredPoint,
+    LineVertex
+};
+
 struct FCSTopoMeasurementPreview
 {
     bool bMeasurable = false;
     bool bUsesDerivedSurface = false;
     bool bUsesRawPoint = false;
+    bool bUsesSnap = false;
+    ECSTopoMeasurementSnapKind SnapKind = ECSTopoMeasurementSnapKind::None;
+    int32 SnapPointNumber = INDEX_NONE;
     FString FitType = TEXT("Unmeasurable");
     FString Message;
     FString SurfaceTileId;
@@ -305,6 +315,7 @@ private:
     const FCSTopoPointCloudSource* FindPointCloud(const FString& SourceId) const;
     FCSTopoDerivedSurfaceManifest* FindDerivedSurfaceMutable(const FString& SourceId);
     const FCSTopoDerivedSurfaceManifest* FindDerivedSurface(const FString& SourceId) const;
+    bool FindSnapTargetFromView(const FVector& ViewOrigin, const FVector& ViewDirection, FCSTopoMeasurementPreview& Preview) const;
     FString GetProjectCacheDirectory() const;
     bool ShouldUseCopcWindowStreaming(const FCSTopoPointCloudSource& Source) const;
     void RefreshRuntimeWindowProcess();
