@@ -444,6 +444,197 @@ FVector SurveyPointFromShot(const FCSTopoShotRecord& Shot)
 {
     return FVector(Shot.Northing, Shot.Easting, Shot.Elevation);
 }
+
+FString BuildLinePairKey(const FString& Code, int32 FirstPointNumber, int32 SecondPointNumber)
+{
+    return FString::Printf(TEXT("%s:%d:%d"), *NormalizeControlCode(Code), FirstPointNumber, SecondPointNumber);
+}
+
+void SuppressLinePair(TSet<FString>& SuppressedPairs, const FString& Code, const FCSTopoShotRecord& A, const FCSTopoShotRecord& B)
+{
+    SuppressedPairs.Add(BuildLinePairKey(Code, A.PointNumber, B.PointNumber));
+}
+
+void SuppressLineRange(TSet<FString>& SuppressedPairs, const FString& Code, const TArray<FCSTopoShotRecord>& BaseShots, int32 FirstIndex, int32 LastIndex)
+{
+    const int32 ClampedFirst = FMath::Max(0, FirstIndex);
+    const int32 ClampedLast = FMath::Min(LastIndex, BaseShots.Num() - 1);
+    for (int32 Index = ClampedFirst; Index < ClampedLast; ++Index)
+    {
+        SuppressLinePair(SuppressedPairs, Code, BaseShots[Index], BaseShots[Index + 1]);
+    }
+}
+
+double NormalizeAngleDelta(double Delta, int32 Direction)
+{
+    if (Direction >= 0)
+    {
+        while (Delta < 0.0)
+        {
+            Delta += 2.0 * UE_DOUBLE_PI;
+        }
+    }
+    else
+    {
+        while (Delta > 0.0)
+        {
+            Delta -= 2.0 * UE_DOUBLE_PI;
+        }
+    }
+    return Delta;
+}
+
+bool CircleCenterFromThreeShots(const FCSTopoShotRecord& A, const FCSTopoShotRecord& B, const FCSTopoShotRecord& C, double& OutCenterE, double& OutCenterN, double& OutRadius)
+{
+    const double AX = A.Easting;
+    const double AY = A.Northing;
+    const double BX = B.Easting;
+    const double BY = B.Northing;
+    const double CX = C.Easting;
+    const double CY = C.Northing;
+    const double D = 2.0 * (AX * (BY - CY) + BX * (CY - AY) + CX * (AY - BY));
+    if (FMath::IsNearlyZero(D))
+    {
+        return false;
+    }
+
+    OutCenterE = ((AX * AX + AY * AY) * (BY - CY) + (BX * BX + BY * BY) * (CY - AY) + (CX * CX + CY * CY) * (AY - BY)) / D;
+    OutCenterN = ((AX * AX + AY * AY) * (CX - BX) + (BX * BX + BY * BY) * (AX - CX) + (CX * CX + CY * CY) * (BX - AX)) / D;
+    OutRadius = FVector2D::Distance(FVector2D(AX, AY), FVector2D(OutCenterE, OutCenterN));
+    return OutRadius > UE_DOUBLE_SMALL_NUMBER;
+}
+
+TArray<FVector> SampleArcPoints(double CenterE, double CenterN, double Radius, const FCSTopoShotRecord& Start, const FCSTopoShotRecord& End, int32 Direction, int32 Count = 49)
+{
+    TArray<FVector> Points;
+    if (Radius <= UE_DOUBLE_SMALL_NUMBER || Count < 2)
+    {
+        return Points;
+    }
+
+    const double StartAngle = FMath::Atan2(Start.Northing - CenterN, Start.Easting - CenterE);
+    const double EndAngle = FMath::Atan2(End.Northing - CenterN, End.Easting - CenterE);
+    const double Delta = NormalizeAngleDelta(EndAngle - StartAngle, Direction);
+    for (int32 Index = 0; Index < Count; ++Index)
+    {
+        const double Alpha = static_cast<double>(Index) / static_cast<double>(Count - 1);
+        const double Angle = StartAngle + Delta * Alpha;
+        const double Elevation = FMath::Lerp(Start.Elevation, End.Elevation, Alpha);
+        Points.Add(FVector(CenterN + FMath::Sin(Angle) * Radius, CenterE + FMath::Cos(Angle) * Radius, Elevation));
+    }
+    Points[0] = SurveyPointFromShot(Start);
+    Points.Last() = SurveyPointFromShot(End);
+    return Points;
+}
+
+bool BuildArcFromThreeShots(const FCSTopoShotRecord& Start, const FCSTopoShotRecord& Middle, const FCSTopoShotRecord& End, TArray<FVector>& OutPoints)
+{
+    double CenterE = 0.0;
+    double CenterN = 0.0;
+    double Radius = 0.0;
+    if (!CircleCenterFromThreeShots(Start, Middle, End, CenterE, CenterN, Radius))
+    {
+        return false;
+    }
+
+    const double StartAngle = FMath::Atan2(Start.Northing - CenterN, Start.Easting - CenterE);
+    const double MiddleAngle = FMath::Atan2(Middle.Northing - CenterN, Middle.Easting - CenterE);
+    const double EndAngle = FMath::Atan2(End.Northing - CenterN, End.Easting - CenterE);
+    const double CcwEnd = NormalizeAngleDelta(EndAngle - StartAngle, 1);
+    const double CcwMiddle = NormalizeAngleDelta(MiddleAngle - StartAngle, 1);
+    const int32 Direction = (CcwMiddle >= 0.0 && CcwMiddle <= CcwEnd) ? 1 : -1;
+    OutPoints = SampleArcPoints(CenterE, CenterN, Radius, Start, End, Direction);
+    return OutPoints.Num() >= 2;
+}
+
+bool BuildTangentArcPoints(const FCSTopoShotRecord& Previous, const FCSTopoShotRecord& Pc, const FCSTopoShotRecord& Pt, TArray<FVector>& OutPoints)
+{
+    FVector2D Tangent(Pc.Easting - Previous.Easting, Pc.Northing - Previous.Northing);
+    const double TangentLength = Tangent.Size();
+    if (TangentLength <= UE_DOUBLE_SMALL_NUMBER)
+    {
+        return false;
+    }
+    Tangent /= TangentLength;
+
+    const FVector2D Normal(-Tangent.Y, Tangent.X);
+    const FVector2D Chord(Pt.Easting - Pc.Easting, Pt.Northing - Pc.Northing);
+    const double Denominator = 2.0 * FVector2D::DotProduct(Normal, Chord);
+    if (FMath::IsNearlyZero(Denominator))
+    {
+        return false;
+    }
+
+    const double Scale = Chord.SizeSquared() / Denominator;
+    const double CenterE = Pc.Easting + Normal.X * Scale;
+    const double CenterN = Pc.Northing + Normal.Y * Scale;
+    const double Radius = FMath::Abs(Scale);
+    const double StartAngle = FMath::Atan2(Pc.Northing - CenterN, Pc.Easting - CenterE);
+    const FVector2D CcwTangent(-FMath::Sin(StartAngle), FMath::Cos(StartAngle));
+    const int32 Direction = FVector2D::DotProduct(CcwTangent, Tangent) >= 0.0 ? 1 : -1;
+    OutPoints = SampleArcPoints(CenterE, CenterN, Radius, Pc, Pt, Direction);
+    return OutPoints.Num() >= 2;
+}
+
+TArray<FVector> BuildCatmullRomPoints(const TArray<FCSTopoShotRecord>& Shots, int32 FirstIndex, int32 LastIndex, int32 SamplesPerSpan = 8)
+{
+    TArray<FVector> SourcePoints;
+    for (int32 Index = FirstIndex; Index <= LastIndex && Shots.IsValidIndex(Index); ++Index)
+    {
+        SourcePoints.Add(SurveyPointFromShot(Shots[Index]));
+    }
+    if (SourcePoints.Num() < 2)
+    {
+        return {};
+    }
+    if (SourcePoints.Num() == 2)
+    {
+        return SourcePoints;
+    }
+
+    TArray<FVector> Points;
+    for (int32 Index = 0; Index + 1 < SourcePoints.Num(); ++Index)
+    {
+        const FVector P0 = SourcePoints[FMath::Max(0, Index - 1)];
+        const FVector P1 = SourcePoints[Index];
+        const FVector P2 = SourcePoints[Index + 1];
+        const FVector P3 = SourcePoints[FMath::Min(SourcePoints.Num() - 1, Index + 2)];
+        for (int32 Sample = 0; Sample < SamplesPerSpan; ++Sample)
+        {
+            if (Index > 0 && Sample == 0)
+            {
+                continue;
+            }
+            const double T = static_cast<double>(Sample) / static_cast<double>(SamplesPerSpan);
+            const double T2 = T * T;
+            const double T3 = T2 * T;
+            Points.Add(0.5 * ((2.0 * P1) + (-P0 + P2) * T + (2.0 * P0 - 5.0 * P1 + 4.0 * P2 - P3) * T2 + (-P0 + 3.0 * P1 - 3.0 * P2 + P3) * T3));
+        }
+    }
+    Points.Add(SourcePoints.Last());
+    return Points;
+}
+
+TArray<FVector> BuildRectanglePoints(const FCSTopoShotRecord& Corner, const FCSTopoShotRecord& LengthShot, const FCSTopoShotRecord& WidthShot)
+{
+    const FVector2D LengthVector(LengthShot.Northing - Corner.Northing, LengthShot.Easting - Corner.Easting);
+    const double Length = LengthVector.Size();
+    if (Length <= UE_DOUBLE_SMALL_NUMBER)
+    {
+        return {};
+    }
+
+    const FVector2D WidthVector(WidthShot.Northing - LengthShot.Northing, WidthShot.Easting - LengthShot.Easting);
+    const double SignedWidth = FVector2D::DotProduct(FVector2D(-LengthVector.Y / Length, LengthVector.X / Length), WidthVector);
+    const FVector2D Offset(-LengthVector.Y / Length * SignedWidth, LengthVector.X / Length * SignedWidth);
+    return {
+        SurveyPointFromShot(Corner),
+        SurveyPointFromShot(LengthShot),
+        FVector(LengthShot.Northing + Offset.X, LengthShot.Easting + Offset.Y, WidthShot.Elevation),
+        FVector(Corner.Northing + Offset.X, Corner.Easting + Offset.Y, WidthShot.Elevation),
+        SurveyPointFromShot(Corner)
+    };
+}
 }
 
 void UCSTopoSurveySubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -1128,6 +1319,7 @@ bool UCSTopoSurveySubsystem::SetPendingControlCode(const FString& ControlCode, c
 
     PendingControlCode = NormalizedControl;
     PendingControlParameter = NormalizedParameter;
+    bPendingControlAutomatic = false;
     StatusMessage = PendingControlParameter.IsEmpty()
         ? FString::Printf(TEXT("%s will apply to the next measurement."), *PendingControlCode)
         : FString::Printf(TEXT("%s %s will apply to the next measurement."), *PendingControlCode, *PendingControlParameter);
@@ -1138,6 +1330,22 @@ void UCSTopoSurveySubsystem::ClearPendingControlCode()
 {
     PendingControlCode.Empty();
     PendingControlParameter.Empty();
+    bPendingControlAutomatic = false;
+}
+
+FString UCSTopoSurveySubsystem::GetPendingControlCode() const
+{
+    return PendingControlCode;
+}
+
+FString UCSTopoSurveySubsystem::GetPendingControlParameter() const
+{
+    return PendingControlParameter;
+}
+
+bool UCSTopoSurveySubsystem::IsPendingControlAutomatic() const
+{
+    return bPendingControlAutomatic;
 }
 
 bool UCSTopoSurveySubsystem::UndoLastMeasurement(FString& StatusMessage)
@@ -2837,7 +3045,7 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
     const FString MeasurementCode = BuildNextMeasurementCode();
     const FString MeasurementControlCode = PendingControlCode;
     const FString MeasurementControlParameter = PendingControlParameter;
-    const bool bStartsNewLine = MeasurementControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase);
+    const bool bStartsNewLine = MeasurementControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase) || MeasurementControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase);
     const bool bJoinLinework = !MeasurementControlCode.Equals(TEXT("IG"), ESearchCase::IgnoreCase);
 
     if (Preview.bUsesDerivedSurface)
@@ -4015,7 +4223,7 @@ FString UCSTopoSurveySubsystem::BuildNextMeasurementCode() const
 
 void UCSTopoSurveySubsystem::ApplyControlBeforeShot(const FString& BaseCode, const FString& ControlCode)
 {
-    if (ControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase))
+    if (ControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase) || ControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase))
     {
         UCSTopoProjectLibrary::SplitFigure(ActiveProject, BaseCode);
     }
@@ -4031,8 +4239,39 @@ void UCSTopoSurveySubsystem::ApplyControlAfterShot(const FCSTopoShotRecord& Shot
     {
         UCSTopoProjectLibrary::CloseActiveFigure(ActiveProject, Shot.BaseCode);
     }
+    else
+    {
+        TArray<const FCSTopoShotRecord*> BaseShots;
+        for (const FCSTopoShotRecord& Candidate : ActiveProject.Shots)
+        {
+            const FString CandidateBaseCode = Candidate.BaseCode.IsEmpty() ? Candidate.Code : Candidate.BaseCode;
+            if (CandidateBaseCode.Equals(Shot.BaseCode, ESearchCase::IgnoreCase))
+            {
+                BaseShots.Add(&Candidate);
+            }
+        }
 
+        for (int32 Index = 0; Index < BaseShots.Num(); ++Index)
+        {
+            if (BaseShots[Index]->PointNumber == Shot.PointNumber)
+            {
+                if (Index >= 2 && BaseShots[Index - 2]->ControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase))
+                {
+                    UCSTopoProjectLibrary::SplitFigure(ActiveProject, Shot.BaseCode);
+                }
+                break;
+            }
+        }
+    }
+
+    const bool bArmAutomaticPt = Shot.ControlCode.Equals(TEXT("PC"), ESearchCase::IgnoreCase);
     ClearPendingControlCode();
+    if (bArmAutomaticPt)
+    {
+        PendingControlCode = TEXT("PT");
+        PendingControlParameter.Empty();
+        bPendingControlAutomatic = true;
+    }
     RebuildFigureSegments();
     bUserTinDirty = true;
 }
@@ -4070,6 +4309,123 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
         ActiveProject.FigureSegments.Add(Segment);
     };
 
+    TSet<FString> SuppressedLinePairs;
+    for (const TPair<FString, TArray<FCSTopoShotRecord>>& Pair : ShotsByBaseCode)
+    {
+        const FString BaseCode = Pair.Key;
+        const TArray<FCSTopoShotRecord>& BaseShots = Pair.Value;
+        int32 ActiveSmoothStartIndex = INDEX_NONE;
+
+        for (int32 ShotIndex = 0; ShotIndex < BaseShots.Num(); ++ShotIndex)
+        {
+            const FCSTopoShotRecord& Shot = BaseShots[ShotIndex];
+            if (Shot.ControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase))
+            {
+                if (ShotIndex > 0)
+                {
+                    SuppressLinePair(SuppressedLinePairs, BaseCode, BaseShots[ShotIndex - 1], Shot);
+                }
+                if (ShotIndex + 2 < BaseShots.Num())
+                {
+                    const FCSTopoShotRecord& LengthShot = BaseShots[ShotIndex + 1];
+                    const FCSTopoShotRecord& WidthShot = BaseShots[ShotIndex + 2];
+                    AddSegment(
+                        ECSTopoFigureSegmentKind::Rectangle,
+                        BaseCode,
+                        { Shot.PointNumber, LengthShot.PointNumber, WidthShot.PointNumber },
+                        BuildRectanglePoints(Shot, LengthShot, WidthShot),
+                        Shot.ControlCode,
+                        Shot.ControlParameter,
+                        WidthShot.PointNumber);
+                    SuppressLineRange(SuppressedLinePairs, BaseCode, BaseShots, ShotIndex, ShotIndex + 2);
+                    if (ShotIndex + 3 < BaseShots.Num())
+                    {
+                        SuppressLinePair(SuppressedLinePairs, BaseCode, WidthShot, BaseShots[ShotIndex + 3]);
+                    }
+                }
+                continue;
+            }
+
+            if (Shot.ControlCode.Equals(TEXT("PT"), ESearchCase::IgnoreCase))
+            {
+                int32 PcIndex = INDEX_NONE;
+                for (int32 CandidateIndex = ShotIndex - 1; CandidateIndex >= 0; --CandidateIndex)
+                {
+                    if (BaseShots[CandidateIndex].ControlCode.Equals(TEXT("PC"), ESearchCase::IgnoreCase))
+                    {
+                        PcIndex = CandidateIndex;
+                        break;
+                    }
+                }
+                if (PcIndex > 0)
+                {
+                    TArray<FVector> Points;
+                    if (BuildTangentArcPoints(BaseShots[PcIndex - 1], BaseShots[PcIndex], Shot, Points))
+                    {
+                        AddSegment(ECSTopoFigureSegmentKind::Arc, BaseCode, { BaseShots[PcIndex].PointNumber, Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+                        SuppressLineRange(SuppressedLinePairs, BaseCode, BaseShots, PcIndex, ShotIndex);
+                    }
+                }
+                continue;
+            }
+
+            if (Shot.ControlCode.Equals(TEXT("NPT"), ESearchCase::IgnoreCase))
+            {
+                int32 NpcIndex = INDEX_NONE;
+                for (int32 CandidateIndex = ShotIndex - 1; CandidateIndex >= 0; --CandidateIndex)
+                {
+                    if (BaseShots[CandidateIndex].ControlCode.Equals(TEXT("NPC"), ESearchCase::IgnoreCase))
+                    {
+                        NpcIndex = CandidateIndex;
+                        break;
+                    }
+                }
+                if (NpcIndex != INDEX_NONE && ShotIndex - NpcIndex >= 2)
+                {
+                    const int32 MiddleIndex = NpcIndex + ((ShotIndex - NpcIndex) / 2);
+                    TArray<FVector> Points;
+                    if (BuildArcFromThreeShots(BaseShots[NpcIndex], BaseShots[MiddleIndex], Shot, Points))
+                    {
+                        AddSegment(ECSTopoFigureSegmentKind::Arc, BaseCode, { BaseShots[NpcIndex].PointNumber, BaseShots[MiddleIndex].PointNumber, Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+                        SuppressLineRange(SuppressedLinePairs, BaseCode, BaseShots, NpcIndex, ShotIndex);
+                    }
+                }
+                continue;
+            }
+
+            if (Shot.ControlCode.Equals(TEXT("SSC"), ESearchCase::IgnoreCase))
+            {
+                ActiveSmoothStartIndex = ShotIndex;
+                continue;
+            }
+
+            if (Shot.ControlCode.Equals(TEXT("ESC"), ESearchCase::IgnoreCase) && ActiveSmoothStartIndex != INDEX_NONE)
+            {
+                TArray<FVector> Points = BuildCatmullRomPoints(BaseShots, ActiveSmoothStartIndex, ShotIndex);
+                TArray<int32> PointNumbers;
+                for (int32 Index = ActiveSmoothStartIndex; Index <= ShotIndex; ++Index)
+                {
+                    PointNumbers.Add(BaseShots[Index].PointNumber);
+                }
+                AddSegment(ECSTopoFigureSegmentKind::SmoothCurve, BaseCode, PointNumbers, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+                SuppressLineRange(SuppressedLinePairs, BaseCode, BaseShots, ActiveSmoothStartIndex, ShotIndex);
+                ActiveSmoothStartIndex = INDEX_NONE;
+            }
+        }
+
+        if (ActiveSmoothStartIndex != INDEX_NONE && BaseShots.Num() - ActiveSmoothStartIndex >= 2)
+        {
+            TArray<FVector> Points = BuildCatmullRomPoints(BaseShots, ActiveSmoothStartIndex, BaseShots.Num() - 1);
+            TArray<int32> PointNumbers;
+            for (int32 Index = ActiveSmoothStartIndex; Index < BaseShots.Num(); ++Index)
+            {
+                PointNumbers.Add(BaseShots[Index].PointNumber);
+            }
+            AddSegment(ECSTopoFigureSegmentKind::SmoothCurve, BaseCode, PointNumbers, Points, TEXT("SSC"), TEXT(""), BaseShots.Last().PointNumber);
+            SuppressLineRange(SuppressedLinePairs, BaseCode, BaseShots, ActiveSmoothStartIndex, BaseShots.Num() - 1);
+        }
+    }
+
     for (const FCSTopoFigureRecord& Figure : ActiveProject.Figures)
     {
         for (int32 Index = 0; Index + 1 < Figure.PointNumbers.Num(); ++Index)
@@ -4078,6 +4434,10 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
             const FCSTopoShotRecord* B = ShotByNumber.Find(Figure.PointNumbers[Index + 1]);
             if (A != nullptr && B != nullptr)
             {
+                if (SuppressedLinePairs.Contains(BuildLinePairKey(Figure.Code, A->PointNumber, B->PointNumber)))
+                {
+                    continue;
+                }
                 AddSegment(ECSTopoFigureSegmentKind::Line, Figure.Code, { A->PointNumber, B->PointNumber }, { SurveyPointFromShot(*A), SurveyPointFromShot(*B) }, TEXT(""), TEXT(""), B->PointNumber);
             }
         }
@@ -4141,31 +4501,6 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
             }
             AddSegment(ECSTopoFigureSegmentKind::OffsetLine, BaseCode, { Previous->PointNumber, Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
         }
-        else if ((Shot.ControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase)) && Previous != nullptr)
-        {
-            FVector CornerPoint = SurveyPointFromShot(Shot);
-            double Width = 0.0;
-            const int32 WidthPointNumber = ParsePointNumberParameter(Shot.ControlParameter);
-            if (const FCSTopoShotRecord* WidthShot = ShotByNumber.Find(WidthPointNumber))
-            {
-                Width = FVector2D::Distance(FVector2D(Shot.Northing, Shot.Easting), FVector2D(WidthShot->Northing, WidthShot->Easting));
-                CornerPoint.Z = WidthShot->Elevation;
-            }
-            else
-            {
-                ParseNumericParameter(Shot.ControlParameter, Width);
-            }
-            const FVector2D Delta(Shot.Northing - Previous->Northing, Shot.Easting - Previous->Easting);
-            const double Length = FMath::Max(Delta.Size(), 0.000001);
-            const FVector2D Offset(-Delta.Y / Length * Width, Delta.X / Length * Width);
-            AddSegment(ECSTopoFigureSegmentKind::Rectangle, BaseCode, { Previous->PointNumber, Shot.PointNumber }, {
-                SurveyPointFromShot(*Previous),
-                SurveyPointFromShot(Shot),
-                FVector(CornerPoint.X + Offset.X, CornerPoint.Y + Offset.Y, CornerPoint.Z),
-                FVector(Previous->Northing + Offset.X, Previous->Easting + Offset.Y, Previous->Elevation),
-                SurveyPointFromShot(*Previous)
-            }, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
-        }
         else if (Shot.ControlCode.Equals(TEXT("SCR"), ESearchCase::IgnoreCase))
         {
             double Radius = FCString::Atod(*Shot.ControlParameter);
@@ -4185,7 +4520,7 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
                 AddSegment(ECSTopoFigureSegmentKind::Circle, BaseCode, { Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
             }
         }
-        else if ((Shot.ControlCode.Equals(TEXT("PT"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("NPT"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("SCE"), ESearchCase::IgnoreCase)) && ShotIndex >= 2)
+        else if (Shot.ControlCode.Equals(TEXT("SCE"), ESearchCase::IgnoreCase) && ShotIndex >= 2)
         {
             const FCSTopoShotRecord& A = (*BaseShots)[ShotIndex - 2];
             const FCSTopoShotRecord& B = (*BaseShots)[ShotIndex - 1];
@@ -4207,20 +4542,8 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
                     const double Angle = 2.0 * UE_DOUBLE_PI * static_cast<double>(Index) / 48.0;
                     Points.Add(FVector(UY + FMath::Sin(Angle) * Radius, UX + FMath::Cos(Angle) * Radius, Shot.Elevation));
                 }
-                AddSegment(Shot.ControlCode.Equals(TEXT("SCE"), ESearchCase::IgnoreCase) ? ECSTopoFigureSegmentKind::Circle : ECSTopoFigureSegmentKind::Arc, BaseCode, { A.PointNumber, B.PointNumber, Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
+                AddSegment(ECSTopoFigureSegmentKind::Circle, BaseCode, { A.PointNumber, B.PointNumber, Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
             }
-        }
-        else if ((Shot.ControlCode.Equals(TEXT("SCPT"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("ESC"), ESearchCase::IgnoreCase)) && ShotIndex >= 2)
-        {
-            TArray<FVector> Points;
-            TArray<int32> PointNumbers;
-            const int32 FirstIndex = FMath::Max(0, ShotIndex - 3);
-            for (int32 Index = FirstIndex; Index <= ShotIndex; ++Index)
-            {
-                Points.Add(SurveyPointFromShot((*BaseShots)[Index]));
-                PointNumbers.Add((*BaseShots)[Index].PointNumber);
-            }
-            AddSegment(ECSTopoFigureSegmentKind::SmoothCurve, BaseCode, PointNumbers, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
         }
     }
 }

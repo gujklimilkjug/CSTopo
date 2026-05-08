@@ -6,8 +6,9 @@
 
 class SEditableTextBox;
 class SVerticalBox;
-struct FSlateImageBrush;
+struct FSlateDynamicImageBrush;
 class UCSTopoSurveySubsystem;
+struct FCSTopoCodeStyle;
 struct FCSTopoControlCodeDefinition;
 
 class SCSTopoSurveyHud : public SCompoundWidget
@@ -42,9 +43,10 @@ private:
 
     TSharedPtr<SEditableTextBox> CodeTextBox;
     TSharedPtr<SEditableTextBox> CodeSearchBox;
+    TSharedPtr<SVerticalBox> CodeSuggestionBox;
     TSharedPtr<SVerticalBox> ControlCodeContainer;
     TSharedPtr<SVerticalBox> RecentShotBox;
-    TSharedPtr<FSlateImageBrush> LogoBrush;
+    TSharedPtr<FSlateDynamicImageBrush> LogoBrush;
 
     FString ActionStatusMessage;
     FString CodeFilterText;
@@ -59,18 +61,22 @@ private:
     bool bCollectorInteractive = false;
 
     void RefreshDynamicContent();
+    void RefreshCodeSuggestions();
     void RefreshControlCodes();
     void RefreshRecentShots();
     void SyncCodeText();
 
     TSharedRef<SWidget> BuildSectionHeader(const FString& Label) const;
+    TSharedRef<SWidget> BuildCodeSuggestionButton(const FCSTopoCodeStyle& Style);
     TSharedRef<SWidget> BuildControlCodeButton(const FCSTopoControlCodeDefinition& Definition);
     TSharedRef<SWidget> BuildCodeCategoryLabel(const FString& Category) const;
 
+    FReply HandleCodeSuggestionPicked(FString Code);
     FReply HandleCollectShot();
     FReply HandleUndo();
     FReply HandleSplitFigure();
     FReply HandleCloseFigure();
+    FReply HandleCancelControlCode();
     void HandleCodeFilterChanged(const FText& NewText);
     void HandleCodeFilterCommitted(const FText& NewText, ETextCommit::Type CommitType);
     void HandleCodeTextChanged(const FText& NewText);
@@ -88,6 +94,10 @@ private:
     FText GetFigureStatusText() const;
     FText GetHoverText() const;
     FText GetActionStatusText() const;
+    FText GetCodeSearchHintText() const;
+    EVisibility GetCodeSuggestionVisibility() const;
+    EVisibility GetControlCancelVisibility() const;
     FSlateColor GetHoverColor() const;
     FSlateColor GetActiveCodeSwatchColor() const;
+    FSlateColor GetCodeSearchBorderColor() const;
 };

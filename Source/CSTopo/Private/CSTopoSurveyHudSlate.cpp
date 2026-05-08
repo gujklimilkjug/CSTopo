@@ -1,7 +1,7 @@
 #include "CSTopoSurveyHudSlate.h"
 
 #include "CSTopoSurveySubsystem.h"
-#include "Brushes/SlateImageBrush.h"
+#include "Brushes/SlateDynamicImageBrush.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
@@ -84,8 +84,30 @@ bool IsControlCodeKnown(const UCSTopoSurveySubsystem* Survey, const FString& Con
 bool ControlCodeNeedsParameter(const FCSTopoControlCodeDefinition& Definition)
 {
     return Definition.ParameterKind == ECSTopoControlParameterKind::Distance
+        || Definition.ParameterKind == ECSTopoControlParameterKind::OptionalDistance
         || Definition.ParameterKind == ECSTopoControlParameterKind::PointNumber
         || Definition.ParameterKind == ECSTopoControlParameterKind::DistanceOrPointNumber;
+}
+
+FString GetControlParameterPrompt(const FCSTopoControlCodeDefinition& Definition)
+{
+    if (Definition.ParameterKind == ECSTopoControlParameterKind::Distance)
+    {
+        return FString::Printf(TEXT("Enter %s distance in the search box, then press Enter."), *Definition.Code);
+    }
+    if (Definition.ParameterKind == ECSTopoControlParameterKind::OptionalDistance)
+    {
+        return FString::Printf(TEXT("Enter optional %s radius in the search box, or press Enter to use the next shot."), *Definition.Code);
+    }
+    if (Definition.ParameterKind == ECSTopoControlParameterKind::PointNumber)
+    {
+        return FString::Printf(TEXT("Enter %s point number in the search box, then press Enter."), *Definition.Code);
+    }
+    if (Definition.ParameterKind == ECSTopoControlParameterKind::DistanceOrPointNumber)
+    {
+        return FString::Printf(TEXT("Type the %s distance or P<point>, then press Enter."), *Definition.Code);
+    }
+    return FString::Printf(TEXT("%s will apply to the next measurement."), *Definition.Code);
 }
 
 const FCSTopoShotRecord* FindShotByPointNumber(const TArray<FCSTopoShotRecord>& Shots, int32 PointNumber)
@@ -111,6 +133,8 @@ FString GetShotTag(const FCSTopoShotRecord& Shot)
         return TEXT("FIT");
     }
 }
+
+const FLinearColor HudPanelColor(0.0667f, 0.0667f, 0.0667f, 0.75f);
 
 class SCSTopoSurveyMiniMap : public SLeafWidget
 {
@@ -196,11 +220,11 @@ public:
         double MaxNorthing = TNumericLimits<double>::Lowest();
         double MinEasting = TNumericLimits<double>::Max();
         double MaxEasting = TNumericLimits<double>::Lowest();
-        bool bHasShotExtent = false;
+        bool bHasMeasurementExtent = false;
 
         for (const FCSTopoShotRecord& Shot : Survey->ActiveProject.Shots)
         {
-            bHasShotExtent = true;
+            bHasMeasurementExtent = true;
             MinNorthing = FMath::Min(MinNorthing, Shot.Northing);
             MaxNorthing = FMath::Max(MaxNorthing, Shot.Northing);
             MinEasting = FMath::Min(MinEasting, Shot.Easting);
@@ -210,7 +234,7 @@ public:
         {
             for (const FVector& SurveyPoint : Segment.SurveyPoints)
             {
-                bHasShotExtent = true;
+                bHasMeasurementExtent = true;
                 MinNorthing = FMath::Min(MinNorthing, static_cast<double>(SurveyPoint.X));
                 MaxNorthing = FMath::Max(MaxNorthing, static_cast<double>(SurveyPoint.X));
                 MinEasting = FMath::Min(MinEasting, static_cast<double>(SurveyPoint.Y));
@@ -218,7 +242,20 @@ public:
             }
         }
 
-        if (!bHasShotExtent)
+        FVector2D CurrentSurveyNe;
+        FVector2D Heading;
+        const bool bHasCurrentPose = Survey->GetCurrentSurveyMapPose(CurrentSurveyNe, Heading);
+
+        if (bHasCurrentPose)
+        {
+            MinNorthing = bHasMeasurementExtent ? FMath::Min(MinNorthing, static_cast<double>(CurrentSurveyNe.X)) : CurrentSurveyNe.X;
+            MaxNorthing = bHasMeasurementExtent ? FMath::Max(MaxNorthing, static_cast<double>(CurrentSurveyNe.X)) : CurrentSurveyNe.X;
+            MinEasting = bHasMeasurementExtent ? FMath::Min(MinEasting, static_cast<double>(CurrentSurveyNe.Y)) : CurrentSurveyNe.Y;
+            MaxEasting = bHasMeasurementExtent ? FMath::Max(MaxEasting, static_cast<double>(CurrentSurveyNe.Y)) : CurrentSurveyNe.Y;
+            bHasMeasurementExtent = true;
+        }
+
+        if (!bHasMeasurementExtent)
         {
             FVector2D BoundsMin;
             FVector2D BoundsMax;
@@ -233,27 +270,24 @@ public:
             MaxEasting = BoundsMax.Y;
         }
 
-        const double NorthingPadding = FMath::Max((MaxNorthing - MinNorthing) * 0.08, 1.0);
-        const double EastingPadding = FMath::Max((MaxEasting - MinEasting) * 0.08, 1.0);
-        MinNorthing -= NorthingPadding;
-        MaxNorthing += NorthingPadding;
-        MinEasting -= EastingPadding;
-        MaxEasting += EastingPadding;
-
-        const double NorthingRange = FMath::Max(MaxNorthing - MinNorthing, 1.0);
-        const double EastingRange = FMath::Max(MaxEasting - MinEasting, 1.0);
+        const double CenterNorthing = bHasCurrentPose ? CurrentSurveyNe.X : (MinNorthing + MaxNorthing) * 0.5;
+        const double CenterEasting = bHasCurrentPose ? CurrentSurveyNe.Y : (MinEasting + MaxEasting) * 0.5;
+        const double HalfNorthing = FMath::Max(
+            FMath::Max(FMath::Abs(MaxNorthing - CenterNorthing), FMath::Abs(MinNorthing - CenterNorthing)),
+            50.0);
+        const double HalfEasting = FMath::Max(
+            FMath::Max(FMath::Abs(MaxEasting - CenterEasting), FMath::Abs(MinEasting - CenterEasting)),
+            50.0);
+        const double NorthingRange = FMath::Max(HalfNorthing * 2.24, 1.0);
+        const double EastingRange = FMath::Max(HalfEasting * 2.24, 1.0);
         const double Scale = FMath::Min(
             static_cast<double>(PlotSize.X) / EastingRange,
             static_cast<double>(PlotSize.Y) / NorthingRange);
-        const double UsedWidth = EastingRange * Scale;
-        const double UsedHeight = NorthingRange * Scale;
-        const double OffsetX = PlotOrigin.X + (PlotSize.X - UsedWidth) * 0.5;
-        const double OffsetY = PlotOrigin.Y + (PlotSize.Y - UsedHeight) * 0.5;
 
         auto MapSurveyPoint = [&](double Northing, double Easting)
         {
-            const double X = OffsetX + (Easting - MinEasting) * Scale;
-            const double Y = OffsetY + UsedHeight - (Northing - MinNorthing) * Scale;
+            const double X = PlotOrigin.X + PlotSize.X * 0.5 + (Easting - CenterEasting) * Scale;
+            const double Y = PlotOrigin.Y + PlotSize.Y * 0.5 - (Northing - CenterNorthing) * Scale;
             return FVector2D(static_cast<float>(X), static_cast<float>(Y));
         };
 
@@ -340,11 +374,9 @@ public:
         }
         ++LayerId;
 
-        FVector2D CurrentSurveyNe;
-        FVector2D Heading;
-        if (Survey->GetCurrentSurveyMapPose(CurrentSurveyNe, Heading))
+        if (bHasCurrentPose)
         {
-            const FVector2D Position = MapSurveyPoint(CurrentSurveyNe.X, CurrentSurveyNe.Y);
+            const FVector2D Position = PlotOrigin + PlotSize * 0.5f;
             const FVector2D Direction = Heading.GetSafeNormal();
             const FVector2D Perp(-Direction.Y, Direction.X);
             const float MarkerLength = 14.0f;
@@ -399,10 +431,10 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
     OnUndo = InArgs._OnUndo;
     ActionStatusMessage = TEXT("Tab focuses the collector. Ctrl+Tab opens the point-cloud manager.");
 
-    const FString LogoPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("Logo"), TEXT("CSTopo_Logo1.png"));
+    const FString LogoPath = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("Logo"), TEXT("CSTopo_Logo1.png")));
     if (FPaths::FileExists(LogoPath))
     {
-        LogoBrush = MakeShared<FSlateImageBrush>(LogoPath, FVector2D(64.0f, 64.0f));
+        LogoBrush = MakeShared<FSlateDynamicImageBrush>(FName(*LogoPath), FVector2D(144.0f, 144.0f));
     }
     else
     {
@@ -428,7 +460,7 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                     SNew(SBorder)
                     .Padding(FMargin(16.0f))
                     .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-                    .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
+                    .BorderBackgroundColor(HudPanelColor)
                     [
                         SNew(SHorizontalBox)
                         + SHorizontalBox::Slot()
@@ -436,12 +468,36 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                         .VAlign(VAlign_Center)
                         [
                             SNew(SBox)
-                            .WidthOverride(72.0f)
-                            .HeightOverride(72.0f)
+                            .WidthOverride(144.0f)
+                            .HeightOverride(144.0f)
+                            .Clipping(EWidgetClipping::ClipToBounds)
                             [
-                                SNew(SImage)
-                                .Image(LogoBrush.IsValid() ? LogoBrush.Get() : FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-                                .ColorAndOpacity(FSlateColor(FLinearColor::White))
+                                SNew(SOverlay)
+                                + SOverlay::Slot()
+                                [
+                                    SNew(SImage)
+                                    .Image(LogoBrush.IsValid() ? LogoBrush.Get() : nullptr)
+                                    .ColorAndOpacity(FSlateColor(FLinearColor::White))
+                                    .RenderTransform(FSlateRenderTransform(FScale2D(1.35f, 1.35f)))
+                                    .RenderTransformPivot(FVector2D(0.5f, 0.5f))
+                                    .Visibility_Lambda([this]()
+                                    {
+                                        return LogoBrush.IsValid() ? EVisibility::HitTestInvisible : EVisibility::Collapsed;
+                                    })
+                                ]
+                                + SOverlay::Slot()
+                                .HAlign(HAlign_Center)
+                                .VAlign(VAlign_Center)
+                                [
+                                    SNew(STextBlock)
+                                    .Text(FText::FromString(TEXT("CS")))
+                                    .Font(FCoreStyle::GetDefaultFontStyle("Bold", 24))
+                                    .ColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.42f, 0.0f, 1.0f)))
+                                    .Visibility_Lambda([this]()
+                                    {
+                                        return LogoBrush.IsValid() ? EVisibility::Collapsed : EVisibility::HitTestInvisible;
+                                    })
+                                ]
                             ]
                         ]
                         + SHorizontalBox::Slot()
@@ -481,7 +537,7 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                         [
                             SNew(SBorder)
                             .Padding(FMargin(14.0f, 10.0f))
-                            .BorderBackgroundColor(FLinearColor(0.018f, 0.024f, 0.032f, 1.0f))
+                            .BorderBackgroundColor(HudPanelColor)
                             [
                                 SNew(SVerticalBox)
                                 + SVerticalBox::Slot()
@@ -519,7 +575,7 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                     SNew(SBorder)
                     .Padding(FMargin(16.0f))
                     .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-                    .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
+                    .BorderBackgroundColor(HudPanelColor)
                     [
                         SNew(SVerticalBox)
                         + SVerticalBox::Slot()
@@ -594,26 +650,41 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                         .AutoHeight()
                         .Padding(FMargin(0.0f, 18.0f, 0.0f, 0.0f))
                         [
-                            SAssignNew(CodeSearchBox, SEditableTextBox)
-                            .HintText(FText::FromString(TEXT("Search code...")))
-                            .Visibility_Lambda([this]()
-                            {
-                                return bCollectorInteractive ? EVisibility::Visible : EVisibility::HitTestInvisible;
-                            })
-                            .OnTextChanged(this, &SCSTopoSurveyHud::HandleCodeFilterChanged)
-                            .OnTextCommitted(this, &SCSTopoSurveyHud::HandleCodeFilterCommitted)
-                        ]
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
-                        .Padding(FMargin(0.0f, 12.0f, 0.0f, 0.0f))
-                        [
-                            SNew(SButton)
-                            .Text(FText::FromString(TEXT("Collect Shot")))
-                            .HAlign(HAlign_Center)
-                            .VAlign(VAlign_Center)
-                            .IsEnabled_Lambda([this]() { return bCollectorInteractive; })
-                            .ButtonColorAndOpacity(FLinearColor(0.14f, 0.44f, 0.28f, 1.0f))
-                            .OnClicked(this, &SCSTopoSurveyHud::HandleCollectShot)
+                            SNew(SBox)
+                            .HeightOverride(32.0f)
+                            [
+                                SNew(SOverlay)
+                                + SOverlay::Slot()
+                                [
+                                    SNew(SBorder)
+                                    .Padding(FMargin(2.0f))
+                                    .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                                    .BorderBackgroundColor(this, &SCSTopoSurveyHud::GetCodeSearchBorderColor)
+                                    [
+                                        SAssignNew(CodeSearchBox, SEditableTextBox)
+                                        .HintText(this, &SCSTopoSurveyHud::GetCodeSearchHintText)
+                                        .Visibility_Lambda([this]()
+                                        {
+                                            return bCollectorInteractive ? EVisibility::Visible : EVisibility::HitTestInvisible;
+                                        })
+                                        .OnTextChanged(this, &SCSTopoSurveyHud::HandleCodeFilterChanged)
+                                        .OnTextCommitted(this, &SCSTopoSurveyHud::HandleCodeFilterCommitted)
+                                    ]
+                                ]
+                                + SOverlay::Slot()
+                                .VAlign(VAlign_Top)
+                                .Padding(FMargin(0.0f, 36.0f, 0.0f, 0.0f))
+                                [
+                                    SNew(SBorder)
+                                    .Padding(FMargin(6.0f))
+                                    .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                                    .BorderBackgroundColor(FLinearColor(0.03f, 0.035f, 0.04f, 0.98f))
+                                    .Visibility(this, &SCSTopoSurveyHud::GetCodeSuggestionVisibility)
+                                    [
+                                        SAssignNew(CodeSuggestionBox, SVerticalBox)
+                                    ]
+                                ]
+                            ]
                         ]
                     ]
                 ]
@@ -633,7 +704,7 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                             SNew(SBorder)
                             .Padding(FMargin(14.0f))
                             .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-                            .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
+                            .BorderBackgroundColor(HudPanelColor)
                             [
                                 SNew(SVerticalBox)
                                 + SVerticalBox::Slot()
@@ -652,6 +723,18 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                                         SAssignNew(ControlCodeContainer, SVerticalBox)
                                     ]
                                 ]
+                                + SVerticalBox::Slot()
+                                .AutoHeight()
+                                .Padding(FMargin(0.0f, 8.0f, 0.0f, 0.0f))
+                                [
+                                    SNew(SButton)
+                                    .Text(FText::FromString(TEXT("Cancel Code")))
+                                    .HAlign(HAlign_Center)
+                                    .VAlign(VAlign_Center)
+                                    .ButtonColorAndOpacity(FLinearColor(0.45f, 0.16f, 0.12f, 1.0f))
+                                    .Visibility(this, &SCSTopoSurveyHud::GetControlCancelVisibility)
+                                    .OnClicked(this, &SCSTopoSurveyHud::HandleCancelControlCode)
+                                ]
                             ]
                         ]
                     ]
@@ -664,7 +747,7 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                             SNew(SBorder)
                             .Padding(FMargin(16.0f))
                             .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-                            .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
+                            .BorderBackgroundColor(HudPanelColor)
                             [
                                 SNew(SVerticalBox)
                                 + SVerticalBox::Slot()
@@ -689,7 +772,7 @@ void SCSTopoSurveyHud::Construct(const FArguments& InArgs)
                     SNew(SBorder)
                     .Padding(FMargin(16.0f))
                     .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
-                    .BorderBackgroundColor(FLinearColor(0.002f, 0.004f, 0.006f, 0.98f))
+                    .BorderBackgroundColor(HudPanelColor)
                     [
                         SNew(SVerticalBox)
                         + SVerticalBox::Slot()
@@ -798,6 +881,7 @@ void SCSTopoSurveyHud::RefreshDynamicContent()
         LastRenderedPaletteCount = PaletteCount;
         LastRenderedActiveCode = ActiveCode;
         LastRenderedFilterText = CodeFilterText;
+        RefreshCodeSuggestions();
     }
 
     if (ControlCodeCount != LastRenderedControlCodeCount)
@@ -810,6 +894,51 @@ void SCSTopoSurveyHud::RefreshDynamicContent()
     {
         RefreshRecentShots();
         LastRenderedShotCount = ShotCount;
+    }
+}
+
+void SCSTopoSurveyHud::RefreshCodeSuggestions()
+{
+    if (!CodeSuggestionBox.IsValid())
+    {
+        return;
+    }
+
+    CodeSuggestionBox->ClearChildren();
+
+    const UCSTopoSurveySubsystem* Survey = SurveySubsystem.Get();
+    if (Survey == nullptr || CodeFilterText.IsEmpty())
+    {
+        return;
+    }
+
+    const FString NormalizedFilter = NormalizeCollectorCode(CodeFilterText);
+    int32 SuggestionCount = 0;
+    constexpr int32 MaxSuggestions = 6;
+
+    for (const FCSTopoCodeStyle& Style : Survey->ActiveProject.CodePalette)
+    {
+        const bool bMatchesCode = Style.Code.Contains(NormalizedFilter, ESearchCase::IgnoreCase);
+        const bool bMatchesName = Style.DisplayName.Contains(CodeFilterText, ESearchCase::IgnoreCase);
+        const bool bMatchesCategory = Style.Category.Contains(CodeFilterText, ESearchCase::IgnoreCase);
+        const bool bMatchesPointType = Style.PointType.Contains(CodeFilterText, ESearchCase::IgnoreCase);
+        if (!bMatchesCode && !bMatchesName && !bMatchesCategory && !bMatchesPointType)
+        {
+            continue;
+        }
+
+        CodeSuggestionBox->AddSlot()
+        .AutoHeight()
+        .Padding(FMargin(0.0f, SuggestionCount == 0 ? 0.0f : 4.0f, 0.0f, 0.0f))
+        [
+            BuildCodeSuggestionButton(Style)
+        ];
+
+        ++SuggestionCount;
+        if (SuggestionCount >= MaxSuggestions)
+        {
+            break;
+        }
     }
 }
 
@@ -844,8 +973,8 @@ void SCSTopoSurveyHud::RefreshControlCodes()
         FString Category = TEXT("OTHER");
         if (Code == TEXT("CLS") || Code == TEXT("END") || Code == TEXT("ESC")) Category = TEXT("NAVIGATION");
         else if (Code == TEXT("IG") || Code == TEXT("JPT") || Code == TEXT("NPC") || Code == TEXT("NPT")) Category = TEXT("IDENTIFICATION");
-        else if (Code == TEXT("OH") || Code == TEXT("OV") || Code == TEXT("PC") || Code == TEXT("PT")) Category = TEXT("MEASUREMENT");
-        else if (Code == TEXT("RECT") || Code == TEXT("SCE") || Code == TEXT("SCPT") || Code == TEXT("SCR") || Code == TEXT("SSC") || Code == TEXT("ST")) Category = TEXT("SHAPE & FEATURE");
+        else if (Code == TEXT("OH") || Code == TEXT("OV") || Code == TEXT("PC")) Category = TEXT("MEASUREMENT");
+        else if (Code == TEXT("RECT") || Code == TEXT("SCE") || Code == TEXT("SCR") || Code == TEXT("SSC") || Code == TEXT("ST")) Category = TEXT("SHAPE & FEATURE");
 
         Categories[Category].Add(Definition);
     }
@@ -964,6 +1093,57 @@ TSharedRef<SWidget> SCSTopoSurveyHud::BuildSectionHeader(const FString& Label) c
 
 
 
+TSharedRef<SWidget> SCSTopoSurveyHud::BuildCodeSuggestionButton(const FCSTopoCodeStyle& Style)
+{
+    FString Detail = Style.DisplayName;
+    if (!Style.PointType.IsEmpty())
+    {
+        Detail = Detail.IsEmpty() ? Style.PointType : FString::Printf(TEXT("%s | %s"), *Detail, *Style.PointType);
+    }
+
+    return SNew(SButton)
+        .ButtonColorAndOpacity(FLinearColor(0.10f, 0.13f, 0.16f, 1.0f))
+        .ContentPadding(FMargin(8.0f, 5.0f))
+        .IsEnabled_Lambda([this]() { return bCollectorInteractive; })
+        .OnClicked(this, &SCSTopoSurveyHud::HandleCodeSuggestionPicked, Style.Code)
+        [
+            SNew(SHorizontalBox)
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .VAlign(VAlign_Center)
+            [
+                SNew(SBox)
+                .WidthOverride(10.0f)
+                .HeightOverride(10.0f)
+                [
+                    SNew(SBorder)
+                    .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+                    .BorderBackgroundColor(Style.Color)
+                ]
+            ]
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(FMargin(8.0f, 0.0f, 0.0f, 0.0f))
+            .VAlign(VAlign_Center)
+            [
+                SNew(STextBlock)
+                .Text(FText::FromString(Style.Code))
+                .Font(FCoreStyle::GetDefaultFontStyle("Bold", 11))
+                .ColorAndOpacity(FSlateColor(FLinearColor::White))
+            ]
+            + SHorizontalBox::Slot()
+            .FillWidth(1.0f)
+            .Padding(FMargin(10.0f, 0.0f, 0.0f, 0.0f))
+            .VAlign(VAlign_Center)
+            [
+                SNew(STextBlock)
+                .Text(FText::FromString(Detail.IsEmpty() ? Style.Category : Detail))
+                .ColorAndOpacity(FSlateColor(FLinearColor(0.70f, 0.78f, 0.84f, 1.0f)))
+                .Clipping(EWidgetClipping::ClipToBounds)
+            ]
+        ];
+}
+
 TSharedRef<SWidget> SCSTopoSurveyHud::BuildControlCodeButton(const FCSTopoControlCodeDefinition& Definition)
 {
     const FString ControlCode = Definition.Code;
@@ -971,7 +1151,16 @@ TSharedRef<SWidget> SCSTopoSurveyHud::BuildControlCodeButton(const FCSTopoContro
         .Text(FText::FromString(ControlCode))
         .ToolTipText(FText::FromString(Definition.Action.IsEmpty() ? ControlCode : Definition.Action))
         .IsEnabled_Lambda([this]() { return bCollectorInteractive; })
-        .ButtonColorAndOpacity(FLinearColor(0.13f, 0.18f, 0.24f, 1.0f))
+        .ButtonColorAndOpacity_Lambda([this, ControlCode]()
+        {
+            const UCSTopoSurveySubsystem* Survey = SurveySubsystem.Get();
+            if (PendingParameterControlCode.Equals(ControlCode, ESearchCase::IgnoreCase)
+                || (Survey != nullptr && Survey->GetPendingControlCode().Equals(ControlCode, ESearchCase::IgnoreCase)))
+            {
+                return FSlateColor(FLinearColor(0.0f, 0.50f, 0.64f, 1.0f));
+            }
+            return FSlateColor(FLinearColor(0.13f, 0.18f, 0.24f, 1.0f));
+        })
         .OnClicked_Lambda([this, ControlCode, Definition]()
         {
             if (UCSTopoSurveySubsystem* Survey = SurveySubsystem.Get())
@@ -979,7 +1168,7 @@ TSharedRef<SWidget> SCSTopoSurveyHud::BuildControlCodeButton(const FCSTopoContro
                 if (ControlCodeNeedsParameter(Definition))
                 {
                     PendingParameterControlCode = ControlCode;
-                    ActionStatusMessage = FString::Printf(TEXT("Type the %s parameter, then press Enter."), *ControlCode);
+                    ActionStatusMessage = GetControlParameterPrompt(Definition);
                     if (CodeSearchBox.IsValid())
                     {
                         CodeFilterText.Empty();
@@ -1015,6 +1204,29 @@ TSharedRef<SWidget> SCSTopoSurveyHud::BuildCodeCategoryLabel(const FString& Cate
             .Text(FText::FromString(Category))
             .ColorAndOpacity(FSlateColor(FLinearColor(0.72f, 0.86f, 0.94f, 1.0f)))
         ];
+}
+
+FReply SCSTopoSurveyHud::HandleCodeSuggestionPicked(FString Code)
+{
+    if (UCSTopoSurveySubsystem* Survey = SurveySubsystem.Get())
+    {
+        Survey->SetActiveCode(Code);
+        PendingParameterControlCode.Empty();
+        ActionStatusMessage = FString::Printf(TEXT("Active code set to %s."), *Survey->ActiveProject.ActiveCode);
+    }
+
+    CodeFilterText.Empty();
+    if (CodeSearchBox.IsValid())
+    {
+        CodeSearchBox->SetText(FText::GetEmpty());
+        if (FSlateApplication::IsInitialized())
+        {
+            FSlateApplication::Get().SetKeyboardFocus(CodeSearchBox, EFocusCause::SetDirectly);
+        }
+    }
+    SyncCodeText();
+    RefreshDynamicContent();
+    return FReply::Handled();
 }
 
 FReply SCSTopoSurveyHud::HandleCollectShot()
@@ -1068,6 +1280,23 @@ FReply SCSTopoSurveyHud::HandleCloseFigure()
     return FReply::Handled();
 }
 
+FReply SCSTopoSurveyHud::HandleCancelControlCode()
+{
+    PendingParameterControlCode.Empty();
+    CodeFilterText.Empty();
+    if (UCSTopoSurveySubsystem* Survey = SurveySubsystem.Get())
+    {
+        Survey->ClearPendingControlCode();
+    }
+    if (CodeSearchBox.IsValid())
+    {
+        CodeSearchBox->SetText(FText::GetEmpty());
+    }
+    ActionStatusMessage = TEXT("Control code selection canceled.");
+    RefreshDynamicContent();
+    return FReply::Handled();
+}
+
 void SCSTopoSurveyHud::HandleCodeFilterChanged(const FText& NewText)
 {
     CodeFilterText = NewText.ToString().TrimStartAndEnd();
@@ -1085,6 +1314,16 @@ void SCSTopoSurveyHud::HandleCodeFilterCommitted(const FText& NewText, ETextComm
     const FString RawText = NewText.ToString().TrimStartAndEnd();
     if (RawText.IsEmpty())
     {
+        if (!PendingParameterControlCode.IsEmpty())
+        {
+            FString StatusMessage;
+            if (Survey->SetPendingControlCode(PendingParameterControlCode, TEXT(""), StatusMessage))
+            {
+                PendingParameterControlCode.Empty();
+            }
+            ActionStatusMessage = StatusMessage;
+            RefreshDynamicContent();
+        }
         return;
     }
 
@@ -1308,7 +1547,62 @@ FText SCSTopoSurveyHud::GetHoverText() const
 
 FText SCSTopoSurveyHud::GetActionStatusText() const
 {
+    if (!PendingParameterControlCode.IsEmpty())
+    {
+        return FText::FromString(FString::Printf(TEXT("Input needed: %s | %s"), *PendingParameterControlCode, *ActionStatusMessage));
+    }
+    if (const UCSTopoSurveySubsystem* Survey = SurveySubsystem.Get())
+    {
+        const FString PendingControlCode = Survey->GetPendingControlCode();
+        if (!PendingControlCode.IsEmpty())
+        {
+            const FString PendingControlParameter = Survey->GetPendingControlParameter();
+            const FString Prefix = Survey->IsPendingControlAutomatic() ? TEXT("Auto next shot") : TEXT("Pending");
+            const FString PendingText = PendingControlParameter.IsEmpty()
+                ? FString::Printf(TEXT("%s: %s"), *Prefix, *PendingControlCode)
+                : FString::Printf(TEXT("%s: %s %s"), *Prefix, *PendingControlCode, *PendingControlParameter);
+            return FText::FromString(FString::Printf(TEXT("%s | %s"), *PendingText, *ActionStatusMessage));
+        }
+    }
     return FText::FromString(ActionStatusMessage);
+}
+
+FText SCSTopoSurveyHud::GetCodeSearchHintText() const
+{
+    if (PendingParameterControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase)
+        || PendingParameterControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase))
+    {
+        return FText::FromString(FString::Printf(TEXT("Enter %s offset distance..."), *PendingParameterControlCode));
+    }
+    if (PendingParameterControlCode.Equals(TEXT("JPT"), ESearchCase::IgnoreCase))
+    {
+        return FText::FromString(TEXT("Enter JPT point number..."));
+    }
+    if (PendingParameterControlCode.Equals(TEXT("SCR"), ESearchCase::IgnoreCase))
+    {
+        return FText::FromString(TEXT("Enter optional SCR radius..."));
+    }
+    if (!PendingParameterControlCode.IsEmpty())
+    {
+        return FText::FromString(FString::Printf(TEXT("Enter %s value..."), *PendingParameterControlCode));
+    }
+    return FText::FromString(TEXT("Search code or enter value..."));
+}
+
+EVisibility SCSTopoSurveyHud::GetCodeSuggestionVisibility() const
+{
+    return bCollectorInteractive && PendingParameterControlCode.IsEmpty() && CodeSuggestionBox.IsValid() && CodeSuggestionBox->NumSlots() > 0
+        ? EVisibility::Visible
+        : EVisibility::Collapsed;
+}
+
+EVisibility SCSTopoSurveyHud::GetControlCancelVisibility() const
+{
+    const UCSTopoSurveySubsystem* Survey = SurveySubsystem.Get();
+    const bool bHasPendingControl = Survey != nullptr && !Survey->GetPendingControlCode().IsEmpty();
+    return bCollectorInteractive && (!PendingParameterControlCode.IsEmpty() || bHasPendingControl)
+        ? EVisibility::Visible
+        : EVisibility::Collapsed;
 }
 
 FSlateColor SCSTopoSurveyHud::GetHoverColor() const
@@ -1333,4 +1627,11 @@ FSlateColor SCSTopoSurveyHud::GetActiveCodeSwatchColor() const
     }
 
     return FSlateColor(GetCodeColor(Survey, Survey->ActiveProject.ActiveCode));
+}
+
+FSlateColor SCSTopoSurveyHud::GetCodeSearchBorderColor() const
+{
+    return PendingParameterControlCode.IsEmpty()
+        ? FSlateColor(FLinearColor(0.10f, 0.13f, 0.16f, 1.0f))
+        : FSlateColor(FLinearColor(0.0f, 0.55f, 0.70f, 1.0f));
 }

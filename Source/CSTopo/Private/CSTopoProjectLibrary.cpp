@@ -134,7 +134,8 @@ const TSet<FString>& LoadKnownControlCodes()
 
 bool IsKnownControlCode(const FString& Code)
 {
-    return LoadKnownControlCodes().Contains(Code.TrimStartAndEnd().ToUpper());
+    const FString NormalizedCode = Code.TrimStartAndEnd().ToUpper();
+    return NormalizedCode.Equals(TEXT("PT"), ESearchCase::IgnoreCase) || LoadKnownControlCodes().Contains(NormalizedCode);
 }
 
 void ParseMeasurementCode(const FString& InCode, FString& OutBaseCode, FString& OutControlCode, FString& OutParameter)

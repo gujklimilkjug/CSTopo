@@ -74,18 +74,11 @@
       "action": "Starts a tangential arc"
     },
     {
-      "name": "EndTangentArc",
-      "code": "PT",
-      "parameter_kind": "None",
-      "geometry_kind": "EndTangentArc",
-      "action": "Ends a tangential arc"
-    },
-    {
       "name": "StartRectangle",
       "code": "RECT",
-      "parameter_kind": "DistanceOrPointNumber",
+      "parameter_kind": "None",
       "geometry_kind": "Rectangle",
-      "action": "Starts a rectangle with an associated point as a corner point and the next point in sequence as an adjacent corner point. Either the width or the point on the opposite side must be specified."
+      "action": "Starts a rectangle. The RECT measurement is the first corner, the next measurement gives the length, and the third measurement gives the width."
     },
     {
       "name": "StartCircleEdge",
@@ -93,13 +86,6 @@
       "parameter_kind": "None",
       "geometry_kind": "CircleEdge",
       "action": "Starts a circle with an associated point as the first known point on the circle followed by the next two known points."
-    },
-    {
-      "name": "EndSmoothCurve",
-      "code": "SCPT",
-      "parameter_kind": "None",
-      "geometry_kind": "EndSmoothCurve",
-      "action": "Ends a smooth curve"
     },
     {
       "name": "StartCircleCenter",

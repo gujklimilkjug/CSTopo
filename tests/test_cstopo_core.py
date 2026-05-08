@@ -138,7 +138,7 @@ class CSTopoCoreTests(unittest.TestCase):
         codes = [control.code for control in controls]
         self.assertEqual(
             codes,
-            ["CLS", "END", "ESC", "IG", "JPT", "NPC", "NPT", "OH", "OV", "PC", "PT", "RECT", "SCE", "SCPT", "SCR", "SSC", "ST"],
+            ["CLS", "END", "ESC", "IG", "JPT", "NPC", "NPT", "OH", "OV", "PC", "RECT", "SCE", "SCR", "SSC", "ST"],
         )
 
         self.assertEqual(parse_control_command("TOEFILL").base_code, "TOEFILL")
@@ -146,8 +146,12 @@ class CSTopoCoreTests(unittest.TestCase):
         self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "OH", "2.5"))
         parsed = parse_control_command("JPT 42", active_code="TOEFILL")
         self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "JPT", "42"))
-        parsed = parse_control_command("TOEFILL RECT P42")
-        self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "RECT", "P42"))
+        parsed = parse_control_command("TOEFILL RECT")
+        self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "RECT", ""))
+        parsed = parse_control_command("TOEFILL PT")
+        self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "", ""))
+        parsed = parse_control_command("TOEFILL SCPT")
+        self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "", ""))
         self.assertEqual(measurement_display_code("toefill", "st"), "TOEFILL ST")
 
     def test_control_codes_are_one_shot_and_update_figures(self):
@@ -179,10 +183,14 @@ class CSTopoCoreTests(unittest.TestCase):
         project.add_shot(10.0, 0.0, 100.0, code="BLDPAD")
         project.add_shot(10.0, 10.0, 100.0, code="BLDPAD JPT 1")
         project.add_shot(20.0, 10.0, 100.0, code="BLDPAD OH 2.5")
-        project.add_shot(30.0, 10.0, 100.0, code="BLDPAD RECT 4.0")
+        project.add_shot(30.0, 10.0, 100.0, code="BLDPAD RECT")
+        project.add_shot(34.0, 10.0, 100.0, code="BLDPAD")
+        project.add_shot(34.0, 14.0, 100.0, code="BLDPAD")
         project.add_shot(35.0, 15.0, 100.0, code="BLDPAD SCE")
         project.add_shot(40.0, 15.0, 100.0, code="BLDPAD SCR 6.0")
-        project.add_shot(45.0, 15.0, 100.0, code="BLDPAD SCPT")
+        project.add_shot(45.0, 15.0, 100.0, code="BLDPAD SSC")
+        project.add_shot(47.0, 17.0, 100.0, code="BLDPAD")
+        project.add_shot(49.0, 15.0, 100.0, code="BLDPAD ESC")
 
         kinds = {segment.segment_kind for segment in project.figure_segments}
         self.assertIn("JoinLine", kinds)
@@ -195,8 +203,85 @@ class CSTopoCoreTests(unittest.TestCase):
             project.add_shot(50.0, 15.0, 100.0, code="BLDPAD OH")
 
         self.assertTrue(project.undo_last_measurement())
-        self.assertEqual(project.next_point_number, 8)
-        self.assertNotIn("SmoothCurve", {segment.segment_kind for segment in project.figure_segments})
+        self.assertEqual(project.next_point_number, 12)
+        self.assertIn("SmoothCurve", {segment.segment_kind for segment in project.figure_segments})
+
+    def test_pc_automatically_applies_pt_to_next_shot_and_draws_arc(self):
+        project = CSTopoProject.default("Tangent Arc")
+        project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
+        project.add_shot(10.0, 0.0, 100.0, code="BLDPAD")
+        project.set_pending_control_code("PC")
+        pc = project.add_shot(20.0, 0.0, 100.0, code="BLDPAD")
+        self.assertEqual(pc.code, "BLDPAD PC")
+        self.assertEqual(project.pending_control_code, "PT")
+        pt = project.add_shot(30.0, 10.0, 100.0, code="BLDPAD")
+        self.assertEqual(pt.code, "BLDPAD PT")
+        self.assertEqual(project.pending_control_code, "")
+
+        arcs = [segment for segment in project.figure_segments if segment.segment_kind == "Arc"]
+        self.assertEqual(len(arcs), 1)
+        self.assertEqual(arcs[0].point_numbers, [pc.point_number, pt.point_number])
+        self.assertAlmostEqual(arcs[0].survey_points[0][0], pc.northing)
+        self.assertAlmostEqual(arcs[0].survey_points[0][1], pc.easting)
+        self.assertAlmostEqual(arcs[0].survey_points[-1][0], pt.northing)
+        self.assertAlmostEqual(arcs[0].survey_points[-1][1], pt.easting)
+        self.assertNotIn([pc.point_number, pt.point_number], [segment.point_numbers for segment in project.figure_segments if segment.segment_kind == "Line"])
+
+    def test_npc_npt_requires_intermediate_curve_point(self):
+        project = CSTopoProject.default("Non Tangent Arc")
+        project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
+        npc = project.add_shot(10.0, 0.0, 100.0, code="BLDPAD NPC")
+        project.add_shot(20.0, 0.0, 100.0, code="BLDPAD NPT")
+        self.assertNotIn("Arc", {segment.segment_kind for segment in project.figure_segments})
+
+        project = CSTopoProject.default("Non Tangent Arc With Mid")
+        project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
+        npc = project.add_shot(10.0, 0.0, 100.0, code="BLDPAD NPC")
+        mid = project.add_shot(15.0, 5.0, 100.0, code="BLDPAD")
+        npt = project.add_shot(20.0, 0.0, 100.0, code="BLDPAD NPT")
+        arcs = [segment for segment in project.figure_segments if segment.segment_kind == "Arc"]
+        self.assertEqual(len(arcs), 1)
+        self.assertEqual(arcs[0].point_numbers, [npc.point_number, mid.point_number, npt.point_number])
+        self.assertAlmostEqual(arcs[0].survey_points[0][0], npc.northing)
+        self.assertAlmostEqual(arcs[0].survey_points[-1][0], npt.northing)
+
+    def test_ssc_creates_live_smooth_curve_until_esc(self):
+        project = CSTopoProject.default("Smooth Curve")
+        project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
+        ssc = project.add_shot(10.0, 0.0, 100.0, code="BLDPAD SSC")
+        middle = project.add_shot(15.0, 4.0, 100.0, code="BLDPAD")
+
+        curves = [segment for segment in project.figure_segments if segment.segment_kind == "SmoothCurve"]
+        self.assertEqual(len(curves), 1)
+        self.assertEqual(curves[0].point_numbers, [ssc.point_number, middle.point_number])
+
+        esc = project.add_shot(20.0, 0.0, 100.0, code="BLDPAD ESC")
+        curves = [segment for segment in project.figure_segments if segment.segment_kind == "SmoothCurve"]
+        self.assertEqual(len(curves), 1)
+        self.assertEqual(curves[0].point_numbers, [ssc.point_number, middle.point_number, esc.point_number])
+        self.assertEqual(curves[0].control_code, "ESC")
+        self.assertGreater(len(curves[0].survey_points), 3)
+
+    def test_rect_uses_next_two_shots_and_then_starts_new_line(self):
+        project = CSTopoProject.default("Rectangle")
+        project.add_shot(-10.0, 0.0, 100.0, code="BLDPAD ST")
+        rect = project.add_shot(0.0, 0.0, 100.0, code="BLDPAD RECT")
+        length = project.add_shot(10.0, 0.0, 100.0, code="BLDPAD")
+        width = project.add_shot(10.0, 5.0, 100.0, code="BLDPAD")
+        next_line_start = project.add_shot(20.0, 5.0, 100.0, code="BLDPAD")
+        next_line_end = project.add_shot(30.0, 5.0, 100.0, code="BLDPAD")
+
+        rectangles = [segment for segment in project.figure_segments if segment.segment_kind == "Rectangle"]
+        self.assertEqual(len(rectangles), 1)
+        self.assertEqual(rectangles[0].point_numbers, [rect.point_number, length.point_number, width.point_number])
+        self.assertEqual(rectangles[0].survey_points[0], (0.0, 0.0, 100.0))
+        self.assertEqual(rectangles[0].survey_points[1], (10.0, 0.0, 100.0))
+        self.assertEqual(rectangles[0].survey_points[2], (10.0, 5.0, 100.0))
+        self.assertEqual(rectangles[0].survey_points[3], (0.0, 5.0, 100.0))
+
+        line_point_numbers = [segment.point_numbers for segment in project.figure_segments if segment.segment_kind == "Line"]
+        self.assertNotIn([width.point_number, next_line_start.point_number], line_point_numbers)
+        self.assertIn([next_line_start.point_number, next_line_end.point_number], line_point_numbers)
 
     def test_control_code_csv_dxf_export_layers(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -176,6 +176,15 @@ public:
     void ClearPendingControlCode();
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    FString GetPendingControlCode() const;
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    FString GetPendingControlParameter() const;
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    bool IsPendingControlAutomatic() const;
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
     bool UndoLastMeasurement(FString& StatusMessage);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
@@ -274,6 +283,7 @@ private:
     FString UserTinStatusLine = TEXT("User TIN hidden.");
     FString PendingControlCode;
     FString PendingControlParameter;
+    bool bPendingControlAutomatic = false;
     TArray<FCSTopoControlCodeDefinition> ControlCodeDefinitions;
 
     bool SpawnPointCloudActor(FCSTopoPointCloudSource& Source, FString& ErrorMessage);

@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 
 Point3 = Tuple[float, float, float]
+INTERNAL_CONTROL_CODES = {"PT"}
 DEFAULT_QGIS_PDAL = Path(r"C:\Program Files\QGIS 3.40.12\bin\pdal.exe")
 SURFACE_MANIFEST_SCHEMA_VERSION = "5.0"
 SURFACE_BUILD_METHOD_TIN = "BufferedDelaunayTIN"
@@ -173,17 +174,22 @@ def control_definition(code: str) -> Optional[ControlCodeDefinition]:
     return None
 
 
+def is_known_control_code(code: str) -> bool:
+    normalized = code.strip().upper()
+    return control_definition(normalized) is not None
+
+
 def parse_control_command(text: str, active_code: str = "") -> ParsedControlCommand:
     tokens = [part.strip().upper() for part in text.split() if part.strip()]
     if not tokens:
         return ParsedControlCommand(active_code.strip().upper())
-    if control_definition(tokens[0]) is not None:
+    if is_known_control_code(tokens[0]):
         return ParsedControlCommand(
             base_code=active_code.strip().upper(),
             control_code=tokens[0],
             parameter=tokens[1] if len(tokens) > 1 else "",
         )
-    if len(tokens) >= 2 and control_definition(tokens[1]) is not None:
+    if len(tokens) >= 2 and is_known_control_code(tokens[1]):
         return ParsedControlCommand(
             base_code=tokens[0],
             control_code=tokens[1],
@@ -471,12 +477,14 @@ class CSTopoProject:
         active_code = parsed.base_code or self.active_code
         control_code = parsed.control_code or self.pending_control_code
         control_parameter = parsed.parameter or self.pending_control_parameter
+        if control_code and control_definition(control_code) is None and control_code not in INTERNAL_CONTROL_CODES:
+            raise ValueError(f"Unknown CSTopo control code: {control_code}")
         self._validate_control_parameter(control_code, control_parameter)
 
         style = self.style_for(active_code)
         if not style.visible and builtin_code_style(active_code) is None:
             raise ValueError(f"Code is not in the CSTopo Code List: {active_code}")
-        if control_code == "ST":
+        if control_code in {"ST", "RECT"}:
             self.split_figure(active_code)
         join_linework = control_code != "IG"
         figure = self.open_figure_for(active_code) if join_linework and point_type_creates_figure_linework(style.point_type) else None
@@ -504,7 +512,11 @@ class CSTopoProject:
             self.split_figure(active_code)
         elif control_code == "CLS":
             self.close_figure(active_code)
+        elif self._shot_completes_rectangle(active_code, shot.point_number):
+            self.split_figure(active_code)
         self.clear_pending_control_code()
+        if control_code == "PC":
+            self.pending_control_code = "PT"
         self.rebuild_figure_segments()
         return shot
 
@@ -538,6 +550,13 @@ class CSTopoProject:
         figure = self.open_figure_for(code or self.active_code)
         figure.closed = True
         figure.loop_closed = True
+
+    def _shot_completes_rectangle(self, code: str, point_number: int) -> bool:
+        base_shots = [shot for shot in self.shots if (shot.base_code or shot.code).upper() == code.upper()]
+        for index, shot in enumerate(base_shots):
+            if shot.point_number == point_number:
+                return index >= 2 and base_shots[index - 2].control_code.upper() == "RECT"
+        return False
 
     def undo_last_measurement(self) -> bool:
         if not self.shots:
@@ -769,7 +788,7 @@ def _sample_circle_points(center_n: float, center_e: float, radius: float, z: fl
     return points
 
 
-def _circle_from_three_points(a: ShotRecord, b: ShotRecord, c: ShotRecord) -> Optional[List[Point3]]:
+def _circle_center_from_three_points(a: ShotRecord, b: ShotRecord, c: ShotRecord) -> Optional[Tuple[float, float, float]]:
     ax, ay = a.easting, a.northing
     bx, by = b.easting, b.northing
     cx, cy = c.easting, c.northing
@@ -779,40 +798,142 @@ def _circle_from_three_points(a: ShotRecord, b: ShotRecord, c: ShotRecord) -> Op
     ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d
     uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d
     radius = math.hypot(ax - ux, ay - uy)
+    return ux, uy, radius
+
+
+def _circle_from_three_points(a: ShotRecord, b: ShotRecord, c: ShotRecord) -> Optional[List[Point3]]:
+    circle = _circle_center_from_three_points(a, b, c)
+    if circle is None:
+        return None
+    ux, uy, radius = circle
     return _sample_circle_points(uy, ux, radius, c.elevation)
 
 
-def _rectangle_points(corner: ShotRecord, previous: Optional[ShotRecord], parameter: str, shots_by_number: Dict[int, ShotRecord]) -> List[Point3]:
-    if parameter.upper().startswith("P"):
-        opposite = shots_by_number.get(_point_number_from_parameter(parameter) or -1)
-        if opposite is None:
-            return []
-        return [
-            _shot_point(corner),
-            (corner.northing, opposite.easting, corner.elevation),
-            _shot_point(opposite),
-            (opposite.northing, corner.easting, opposite.elevation),
-            _shot_point(corner),
-        ]
-    if previous is None:
+def _normalize_angle_delta(delta: float, direction: int) -> float:
+    if direction >= 0:
+        while delta < 0.0:
+            delta += 2.0 * math.pi
+    else:
+        while delta > 0.0:
+            delta -= 2.0 * math.pi
+    return delta
+
+
+def _sample_arc_points(
+    center_e: float,
+    center_n: float,
+    radius: float,
+    start: ShotRecord,
+    end: ShotRecord,
+    direction: int,
+    count: int = 49,
+) -> List[Point3]:
+    start_angle = math.atan2(start.northing - center_n, start.easting - center_e)
+    end_angle = math.atan2(end.northing - center_n, end.easting - center_e)
+    delta = _normalize_angle_delta(end_angle - start_angle, direction)
+    points: List[Point3] = []
+    for index in range(count):
+        alpha = index / (count - 1)
+        angle = start_angle + delta * alpha
+        elevation = start.elevation + (end.elevation - start.elevation) * alpha
+        points.append((center_n + math.sin(angle) * radius, center_e + math.cos(angle) * radius, elevation))
+    if points:
+        points[0] = _shot_point(start)
+        points[-1] = _shot_point(end)
+    return points
+
+
+def _arc_from_three_points(start: ShotRecord, middle: ShotRecord, end: ShotRecord) -> Optional[List[Point3]]:
+    circle = _circle_center_from_three_points(start, middle, end)
+    if circle is None:
+        return None
+    center_e, center_n, radius = circle
+    start_angle = math.atan2(start.northing - center_n, start.easting - center_e)
+    middle_angle = math.atan2(middle.northing - center_n, middle.easting - center_e)
+    end_angle = math.atan2(end.northing - center_n, end.easting - center_e)
+    ccw_end = _normalize_angle_delta(end_angle - start_angle, 1)
+    ccw_middle = _normalize_angle_delta(middle_angle - start_angle, 1)
+    direction = 1 if 0.0 <= ccw_middle <= ccw_end else -1
+    return _sample_arc_points(center_e, center_n, radius, start, end, direction)
+
+
+def _tangent_arc_points(previous: ShotRecord, pc: ShotRecord, pt: ShotRecord) -> Optional[List[Point3]]:
+    tx = pc.easting - previous.easting
+    ty = pc.northing - previous.northing
+    tangent_length = math.hypot(tx, ty)
+    if tangent_length <= 1.0e-9:
+        return None
+    tx /= tangent_length
+    ty /= tangent_length
+    nx = -ty
+    ny = tx
+    dx = pt.easting - pc.easting
+    dy = pt.northing - pc.northing
+    denominator = 2.0 * (nx * dx + ny * dy)
+    if abs(denominator) <= 1.0e-9:
+        return None
+    scale = (dx * dx + dy * dy) / denominator
+    center_e = pc.easting + nx * scale
+    center_n = pc.northing + ny * scale
+    radius = abs(scale)
+    start_angle = math.atan2(pc.northing - center_n, pc.easting - center_e)
+    ccw_tangent = (-math.sin(start_angle), math.cos(start_angle))
+    direction = 1 if ccw_tangent[0] * tx + ccw_tangent[1] * ty >= 0.0 else -1
+    return _sample_arc_points(center_e, center_n, radius, pc, pt, direction)
+
+
+def _catmull_rom_points(shots: Sequence[ShotRecord], samples_per_span: int = 8) -> List[Point3]:
+    if len(shots) < 2:
         return []
-    try:
-        width = float(parameter)
-    except ValueError:
+    if len(shots) == 2:
+        return [_shot_point(shots[0]), _shot_point(shots[1])]
+    points: List[Point3] = []
+    source = [_shot_point(shot) for shot in shots]
+    for index in range(len(source) - 1):
+        p0 = source[max(0, index - 1)]
+        p1 = source[index]
+        p2 = source[index + 1]
+        p3 = source[min(len(source) - 1, index + 2)]
+        for sample in range(samples_per_span):
+            if index > 0 and sample == 0:
+                continue
+            t = sample / samples_per_span
+            t2 = t * t
+            t3 = t2 * t
+            point = tuple(
+                0.5
+                * (
+                    (2.0 * p1[axis])
+                    + (-p0[axis] + p2[axis]) * t
+                    + (2.0 * p0[axis] - 5.0 * p1[axis] + 4.0 * p2[axis] - p3[axis]) * t2
+                    + (-p0[axis] + 3.0 * p1[axis] - 3.0 * p2[axis] + p3[axis]) * t3
+                )
+                for axis in range(3)
+            )
+            points.append(point)  # type: ignore[arg-type]
+    points.append(source[-1])
+    return points
+
+
+def _rectangle_points(corner: ShotRecord, length_shot: Optional[ShotRecord], width_shot: Optional[ShotRecord]) -> List[Point3]:
+    if length_shot is None or width_shot is None:
         return []
-    dn = corner.northing - previous.northing
-    de = corner.easting - previous.easting
+    dn = length_shot.northing - corner.northing
+    de = length_shot.easting - corner.easting
     length = math.hypot(dn, de)
     if length <= 1.0e-9:
         return []
-    pn = -de / length * width
-    pe = dn / length * width
+    wn = width_shot.northing - length_shot.northing
+    we = width_shot.easting - length_shot.easting
+    signed_width = (-de / length) * wn + (dn / length) * we
+    offset_n = -de / length * signed_width
+    offset_e = dn / length * signed_width
     return [
-        _shot_point(previous),
         _shot_point(corner),
-        (corner.northing + pn, corner.easting + pe, corner.elevation),
-        (previous.northing + pn, previous.easting + pe, previous.elevation),
-        _shot_point(previous),
+        _shot_point(length_shot),
+        (length_shot.northing + offset_n, length_shot.easting + offset_e, width_shot.elevation),
+        (corner.northing + offset_n, corner.easting + offset_e, width_shot.elevation),
+        _shot_point(corner),
     ]
 
 
@@ -822,6 +943,7 @@ def build_figure_segments(project: CSTopoProject) -> List[FigureSegmentRecord]:
     shots_by_base: Dict[str, List[ShotRecord]] = {}
     for shot in project.shots:
         shots_by_base.setdefault((shot.base_code or shot.code).upper(), []).append(shot)
+    suppressed_line_pairs: Set[Tuple[str, int, int]] = set()
 
     def add_segment(kind: str, code: str, point_numbers: List[int], points: List[Point3], control_code: str = "", parameter: str = "", created_by: int = 0) -> None:
         if len(points) < 2:
@@ -841,9 +963,71 @@ def build_figure_segments(project: CSTopoProject) -> List[FigureSegmentRecord]:
             )
         )
 
+    def suppress_pair(code: str, first: ShotRecord, second: ShotRecord) -> None:
+        suppressed_line_pairs.add((code.upper(), first.point_number, second.point_number))
+
+    def suppress_range(code: str, base_shots: Sequence[ShotRecord], first_index: int, last_index: int) -> None:
+        for pair_index in range(max(0, first_index), min(last_index, len(base_shots) - 1)):
+            suppress_pair(code, base_shots[pair_index], base_shots[pair_index + 1])
+
+    for base_code, base_shots in shots_by_base.items():
+        active_smooth_start: Optional[int] = None
+        for index, shot in enumerate(base_shots):
+            control = shot.control_code.upper()
+            if control == "RECT":
+                if index > 0:
+                    suppress_pair(base_code, base_shots[index - 1], shot)
+                if index + 2 < len(base_shots):
+                    length_shot = base_shots[index + 1]
+                    width_shot = base_shots[index + 2]
+                    points = _rectangle_points(shot, length_shot, width_shot)
+                    add_segment("Rectangle", base_code, [shot.point_number, length_shot.point_number, width_shot.point_number], points, control, shot.control_parameter, width_shot.point_number)
+                    suppress_range(base_code, base_shots, index, index + 2)
+                    if index + 3 < len(base_shots):
+                        suppress_pair(base_code, width_shot, base_shots[index + 3])
+                continue
+
+            if control == "PT":
+                pc_index = next((candidate for candidate in range(index - 1, -1, -1) if base_shots[candidate].control_code.upper() == "PC"), None)
+                if pc_index is not None and pc_index > 0:
+                    points = _tangent_arc_points(base_shots[pc_index - 1], base_shots[pc_index], shot)
+                    if points:
+                        add_segment("Arc", base_code, [base_shots[pc_index].point_number, shot.point_number], points, control, shot.control_parameter, shot.point_number)
+                        suppress_range(base_code, base_shots, pc_index, index)
+                continue
+
+            if control == "NPT":
+                npc_index = next((candidate for candidate in range(index - 1, -1, -1) if base_shots[candidate].control_code.upper() == "NPC"), None)
+                if npc_index is not None and index - npc_index >= 2:
+                    middle_index = npc_index + ((index - npc_index) // 2)
+                    points = _arc_from_three_points(base_shots[npc_index], base_shots[middle_index], shot)
+                    if points:
+                        add_segment("Arc", base_code, [base_shots[npc_index].point_number, base_shots[middle_index].point_number, shot.point_number], points, control, shot.control_parameter, shot.point_number)
+                        suppress_range(base_code, base_shots, npc_index, index)
+                continue
+
+            if control == "SSC":
+                active_smooth_start = index
+                continue
+
+            if control == "ESC" and active_smooth_start is not None:
+                curve_shots = base_shots[active_smooth_start : index + 1]
+                points = _catmull_rom_points(curve_shots)
+                add_segment("SmoothCurve", base_code, [candidate.point_number for candidate in curve_shots], points, control, shot.control_parameter, shot.point_number)
+                suppress_range(base_code, base_shots, active_smooth_start, index)
+                active_smooth_start = None
+
+        if active_smooth_start is not None and len(base_shots) - active_smooth_start >= 2:
+            curve_shots = base_shots[active_smooth_start:]
+            points = _catmull_rom_points(curve_shots)
+            add_segment("SmoothCurve", base_code, [candidate.point_number for candidate in curve_shots], points, "SSC", "", curve_shots[-1].point_number)
+            suppress_range(base_code, base_shots, active_smooth_start, len(base_shots) - 1)
+
     for figure in project.figures:
         sequence = [number for number in figure.point_numbers if number in shots_by_number]
         for a_number, b_number in zip(sequence, sequence[1:]):
+            if (figure.code.upper(), a_number, b_number) in suppressed_line_pairs:
+                continue
             add_segment("Line", figure.code, [a_number, b_number], [_shot_point(shots_by_number[a_number]), _shot_point(shots_by_number[b_number])])
         if figure.loop_closed and len(sequence) >= 2:
             add_segment("Line", figure.code, [sequence[-1], sequence[0]], [_shot_point(shots_by_number[sequence[-1]]), _shot_point(shots_by_number[sequence[0]])], "CLS", "", sequence[-1])
@@ -881,16 +1065,10 @@ def build_figure_segments(project: CSTopoProject) -> List[FigureSegmentRecord]:
                     (shot.northing, shot.easting, shot.elevation + distance),
                 ]
             add_segment("OffsetLine", base_code, [previous.point_number, shot.point_number], points, control, shot.control_parameter, shot.point_number)
-        elif control in {"PT", "NPT", "SCE"} and index >= 2:
+        elif control == "SCE" and index >= 2:
             circle = _circle_from_three_points(base_shots[index - 2], base_shots[index - 1], shot)
             if circle is not None:
-                add_segment("Circle" if control == "SCE" else "Arc", base_code, [base_shots[index - 2].point_number, base_shots[index - 1].point_number, shot.point_number], circle, control, shot.control_parameter, shot.point_number)
-        elif control in {"SCPT", "ESC"} and index >= 2:
-            curve_points = [_shot_point(candidate) for candidate in base_shots[max(0, index - 3) : index + 1]]
-            add_segment("SmoothCurve", base_code, [candidate.point_number for candidate in base_shots[max(0, index - 3) : index + 1]], curve_points, control, shot.control_parameter, shot.point_number)
-        elif control == "RECT":
-            points = _rectangle_points(shot, previous, shot.control_parameter, shots_by_number)
-            add_segment("Rectangle", base_code, [point.point_number for point in [previous, shot] if point is not None], points, control, shot.control_parameter, shot.point_number)
+                add_segment("Circle", base_code, [base_shots[index - 2].point_number, base_shots[index - 1].point_number, shot.point_number], circle, control, shot.control_parameter, shot.point_number)
         elif control == "SCR":
             try:
                 radius = float(shot.control_parameter) if shot.control_parameter else 0.0
