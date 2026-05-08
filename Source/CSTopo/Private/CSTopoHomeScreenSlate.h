@@ -29,6 +29,7 @@ private:
     TSharedPtr<class STextBlock> StatusText;
     TSharedPtr<class STextBlock> DetailText;
     TSharedPtr<class STextBlock> ProgressText;
+    TSharedPtr<struct FSlateDynamicImageBrush> LogoBrush;
 
     FReply OpenProjectClicked();
     FReply ImportPointCloudClicked();

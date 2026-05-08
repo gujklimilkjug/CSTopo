@@ -1,14 +1,27 @@
 #include "CSTopoHomeScreenSlate.h"
 
 #include "CSTopoSurveySubsystem.h"
+#include "Brushes/SlateDynamicImageBrush.h"
+#include "Misc/Paths.h"
+#include "Styling/CoreStyle.h"
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
-#include "Widgets/Layout/SConstraintCanvas.h"
 #include "Widgets/Layout/SSeparator.h"
+#include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Text/STextBlock.h"
+
+namespace
+{
+const FLinearColor HomeScreenBackgroundColor(0.0667f, 0.0667f, 0.0667f, 1.0f);
+const FVector2D HomeScreenLogoSize(2520.0f, 2520.0f);
+const int32 HomeScreenMainButtonFontSize = 24;
+const int32 HomeScreenStatusFontSize = 20;
+}
 
 void SCSTopoHomeScreen::Construct(const FArguments& InArgs)
 {
@@ -18,131 +31,193 @@ void SCSTopoHomeScreen::Construct(const FArguments& InArgs)
     OnRetrySurface = InArgs._OnRetrySurface;
     OnCancelToHome = InArgs._OnCancelToHome;
 
+    const FString LogoPath = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectDir(), TEXT("Logo"), TEXT("CSTopo_Logo1.png")));
+    if (FPaths::FileExists(LogoPath))
+    {
+        LogoBrush = MakeShared<FSlateDynamicImageBrush>(FName(*LogoPath), HomeScreenLogoSize);
+    }
+    else
+    {
+        LogoBrush.Reset();
+    }
+
     ChildSlot
     [
         SNew(SBorder)
         .Padding(FMargin(0.0f))
-        .BorderBackgroundColor(FLinearColor(0.015f, 0.017f, 0.02f, 0.98f))
+        .BorderImage(FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")))
+        .BorderBackgroundColor(HomeScreenBackgroundColor)
         [
-            SNew(SConstraintCanvas)
-            + SConstraintCanvas::Slot()
-            .Anchors(FAnchors(0.5f, 0.5f))
-            .Alignment(FVector2D(0.5f, 0.5f))
-            .AutoSize(true)
+            SNew(SVerticalBox)
+            + SVerticalBox::Slot()
+            .FillHeight(1.0f)
+            .Padding(FMargin(32.0f, 16.0f, 32.0f, 8.0f))
             [
-                SNew(SBox)
-                .WidthOverride(560.0f)
+                SNew(SScaleBox)
+                .Stretch(EStretch::ScaleToFit)
+                .StretchDirection(EStretchDirection::DownOnly)
+                .HAlign(HAlign_Center)
+                .VAlign(VAlign_Center)
                 [
-                    SNew(SVerticalBox)
-                    + SVerticalBox::Slot()
-                    .AutoHeight()
-                    .Padding(FMargin(0.0f, 0.0f, 0.0f, 12.0f))
+                    SNew(SBox)
+                    .WidthOverride(HomeScreenLogoSize.X)
+                    .HeightOverride(HomeScreenLogoSize.Y)
                     [
-                        SNew(STextBlock)
-                        .Text(FText::FromString(TEXT("CSTopo")))
-                        .Justification(ETextJustify::Center)
-                        .ColorAndOpacity(FSlateColor(FLinearColor::White))
-                    ]
-                    + SVerticalBox::Slot()
-                    .AutoHeight()
-                    .Padding(FMargin(0.0f, 0.0f, 0.0f, 22.0f))
-                    [
-                        SNew(STextBlock)
-                        .Text(FText::FromString(TEXT("Open a survey project or create one from a point cloud.")))
-                        .Justification(ETextJustify::Center)
-                        .ColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.83f, 0.88f, 1.0f)))
-                    ]
-                    + SVerticalBox::Slot()
-                    .AutoHeight()
-                    .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
-                    [
-                        SNew(SButton)
-                        .Text(FText::FromString(TEXT("Open Project...")))
-                        .HAlign(HAlign_Center)
-                        .OnClicked(this, &SCSTopoHomeScreen::OpenProjectClicked)
-                    ]
-                    + SVerticalBox::Slot()
-                    .AutoHeight()
-                    .Padding(FMargin(0.0f, 0.0f, 0.0f, 14.0f))
-                    [
-                        SNew(SButton)
-                        .Text(FText::FromString(TEXT("Import Point Cloud...")))
-                        .HAlign(HAlign_Center)
-                        .OnClicked(this, &SCSTopoHomeScreen::ImportPointCloudClicked)
-                    ]
-                    + SVerticalBox::Slot()
-                    .AutoHeight()
-                    .Padding(FMargin(0.0f, 0.0f, 0.0f, 14.0f))
-                    [
-                        SNew(SSeparator)
-                    ]
-                    + SVerticalBox::Slot()
-                    .AutoHeight()
-                    .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
-                    [
-                        SAssignNew(StatusText, STextBlock)
-                        .AutoWrapText(true)
-                        .Justification(ETextJustify::Center)
-                        .ColorAndOpacity(FSlateColor(FLinearColor(0.68f, 0.88f, 1.0f, 1.0f)))
-                    ]
-                    + SVerticalBox::Slot()
-                    .AutoHeight()
-                    .Padding(FMargin(0.0f, 0.0f, 0.0f, 14.0f))
-                    [
-                        SAssignNew(DetailText, STextBlock)
-                        .AutoWrapText(true)
-                        .Justification(ETextJustify::Center)
-                        .ColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.82f, 0.86f, 1.0f)))
-                    ]
-                    + SVerticalBox::Slot()
-                    .AutoHeight()
-                    .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
-                    [
-                        SNew(SVerticalBox)
-                        .Visibility(this, &SCSTopoHomeScreen::GetProgressVisibility)
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
+                        SNew(SOverlay)
+                        + SOverlay::Slot()
                         [
-                            SNew(SProgressBar)
-                            .Percent(this, &SCSTopoHomeScreen::GetSurfaceBuildProgress)
+                            SNew(SImage)
+                            .Image(LogoBrush.IsValid() ? LogoBrush.Get() : nullptr)
+                            .ColorAndOpacity(FSlateColor(FLinearColor::White))
+                            .Visibility_Lambda([this]()
+                            {
+                                return LogoBrush.IsValid() ? EVisibility::HitTestInvisible : EVisibility::Collapsed;
+                            })
                         ]
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
-                        .Padding(FMargin(0.0f, 6.0f, 0.0f, 0.0f))
+                        + SOverlay::Slot()
+                        .HAlign(HAlign_Center)
+                        .VAlign(VAlign_Center)
                         [
-                            SAssignNew(ProgressText, STextBlock)
-                            .AutoWrapText(true)
+                            SNew(STextBlock)
+                            .Text(FText::FromString(TEXT("CSTopo")))
+                            .Font(FCoreStyle::GetDefaultFontStyle("Bold", 72))
                             .Justification(ETextJustify::Center)
-                            .ColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.92f, 0.80f, 1.0f)))
-                        ]
-                    ]
-                    + SVerticalBox::Slot()
-                    .AutoHeight()
-                    .HAlign(HAlign_Center)
-                    .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
-                    [
-                        SNew(SHorizontalBox)
-                        .Visibility(this, &SCSTopoHomeScreen::GetRetryVisibility)
-                        + SHorizontalBox::Slot()
-                        .AutoWidth()
-                        .Padding(FMargin(0.0f, 0.0f, 8.0f, 0.0f))
-                        [
-                            SNew(SButton)
-                            .Text(FText::FromString(TEXT("Retry Surface Build")))
-                            .OnClicked(this, &SCSTopoHomeScreen::RetrySurfaceClicked)
-                        ]
-                        + SHorizontalBox::Slot()
-                        .AutoWidth()
-                        [
-                            SNew(SButton)
-                            .Text(FText::FromString(TEXT("Cancel To Home")))
-                            .OnClicked(this, &SCSTopoHomeScreen::CancelToHomeClicked)
+                            .ColorAndOpacity(FSlateColor(FLinearColor::White))
+                            .Visibility_Lambda([this]()
+                            {
+                                return LogoBrush.IsValid() ? EVisibility::Collapsed : EVisibility::HitTestInvisible;
+                            })
                         ]
                     ]
                 ]
             ]
-        ]
-    ];
+            + SVerticalBox::Slot()
+            .AutoHeight()
+            .HAlign(HAlign_Center)
+            .Padding(FMargin(0.0f, 0.0f, 0.0f, 42.0f))
+            [
+                SNew(SBox)
+                .WidthOverride(720.0f)
+                [
+                    SNew(SVerticalBox)
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
+                        [
+                            SNew(SButton)
+                            .HAlign(HAlign_Center)
+                            .ContentPadding(FMargin(16.0f, 10.0f))
+                            .OnClicked(this, &SCSTopoHomeScreen::OpenProjectClicked)
+                            [
+                                SNew(STextBlock)
+                                .Text(FText::FromString(TEXT("Open Project...")))
+                                .Font(FCoreStyle::GetDefaultFontStyle("Regular", HomeScreenMainButtonFontSize))
+                                .Justification(ETextJustify::Center)
+                            ]
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 0.0f, 0.0f, 14.0f))
+                        [
+                            SNew(SButton)
+                            .HAlign(HAlign_Center)
+                            .ContentPadding(FMargin(16.0f, 10.0f))
+                            .OnClicked(this, &SCSTopoHomeScreen::ImportPointCloudClicked)
+                            [
+                                SNew(STextBlock)
+                                .Text(FText::FromString(TEXT("Import Point Cloud...")))
+                                .Font(FCoreStyle::GetDefaultFontStyle("Regular", HomeScreenMainButtonFontSize))
+                                .Justification(ETextJustify::Center)
+                            ]
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 0.0f, 0.0f, 14.0f))
+                        [
+                            SNew(SSeparator)
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
+                        [
+                            SAssignNew(StatusText, STextBlock)
+                            .AutoWrapText(true)
+                            .Font(FCoreStyle::GetDefaultFontStyle("Regular", HomeScreenStatusFontSize))
+                            .Justification(ETextJustify::Center)
+                            .ColorAndOpacity(FSlateColor(FLinearColor(0.68f, 0.88f, 1.0f, 1.0f)))
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 0.0f, 0.0f, 14.0f))
+                        [
+                            SAssignNew(DetailText, STextBlock)
+                            .AutoWrapText(true)
+                            .Font(FCoreStyle::GetDefaultFontStyle("Regular", HomeScreenStatusFontSize))
+                            .Justification(ETextJustify::Center)
+                            .ColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.82f, 0.86f, 1.0f)))
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
+                        [
+                            SNew(SVerticalBox)
+                            .Visibility(this, &SCSTopoHomeScreen::GetProgressVisibility)
+                            + SVerticalBox::Slot()
+                            .AutoHeight()
+                            [
+                                SNew(SProgressBar)
+                                .Percent(this, &SCSTopoHomeScreen::GetSurfaceBuildProgress)
+                            ]
+                            + SVerticalBox::Slot()
+                            .AutoHeight()
+                            .Padding(FMargin(0.0f, 6.0f, 0.0f, 0.0f))
+                            [
+                                SAssignNew(ProgressText, STextBlock)
+                                .AutoWrapText(true)
+                                .Font(FCoreStyle::GetDefaultFontStyle("Regular", HomeScreenStatusFontSize))
+                                .Justification(ETextJustify::Center)
+                                .ColorAndOpacity(FSlateColor(FLinearColor(0.78f, 0.92f, 0.80f, 1.0f)))
+                            ]
+                        ]
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .HAlign(HAlign_Center)
+                        .Padding(FMargin(0.0f, 0.0f, 0.0f, 8.0f))
+                        [
+                            SNew(SHorizontalBox)
+                            .Visibility(this, &SCSTopoHomeScreen::GetRetryVisibility)
+                            + SHorizontalBox::Slot()
+                            .AutoWidth()
+                            .Padding(FMargin(0.0f, 0.0f, 8.0f, 0.0f))
+                            [
+                                SNew(SButton)
+                                .ContentPadding(FMargin(12.0f, 8.0f))
+                                .OnClicked(this, &SCSTopoHomeScreen::RetrySurfaceClicked)
+                                [
+                                    SNew(STextBlock)
+                                    .Text(FText::FromString(TEXT("Retry Surface Build")))
+                                    .Font(FCoreStyle::GetDefaultFontStyle("Regular", HomeScreenStatusFontSize))
+                                    .Justification(ETextJustify::Center)
+                                ]
+                            ]
+                            + SHorizontalBox::Slot()
+                            .AutoWidth()
+                            [
+                                SNew(SButton)
+                                .ContentPadding(FMargin(12.0f, 8.0f))
+                                .OnClicked(this, &SCSTopoHomeScreen::CancelToHomeClicked)
+                                [
+                                    SNew(STextBlock)
+                                    .Text(FText::FromString(TEXT("Cancel To Home")))
+                                    .Font(FCoreStyle::GetDefaultFontStyle("Regular", HomeScreenStatusFontSize))
+                                    .Justification(ETextJustify::Center)
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ];
 
     Refresh();
 }
