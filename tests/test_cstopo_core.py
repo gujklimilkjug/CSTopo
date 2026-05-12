@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import struct
 import tempfile
 import unittest
@@ -144,6 +145,8 @@ class CSTopoCoreTests(unittest.TestCase):
         self.assertEqual(parse_control_command("TOEFILL").base_code, "TOEFILL")
         parsed = parse_control_command("TOEFILL OH 2.5")
         self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "OH", "2.5"))
+        parsed = parse_control_command("TOEFILL ST OH 2.5")
+        self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter, parsed.starts_new_figure), ("TOEFILL", "OH", "2.5", True))
         parsed = parse_control_command("JPT 42", active_code="TOEFILL")
         self.assertEqual((parsed.base_code, parsed.control_code, parsed.parameter), ("TOEFILL", "JPT", "42"))
         parsed = parse_control_command("TOEFILL RECT")
@@ -182,7 +185,8 @@ class CSTopoCoreTests(unittest.TestCase):
         project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
         project.add_shot(10.0, 0.0, 100.0, code="BLDPAD")
         project.add_shot(10.0, 10.0, 100.0, code="BLDPAD JPT 1")
-        project.add_shot(20.0, 10.0, 100.0, code="BLDPAD OH 2.5")
+        project.add_shot(20.0, 10.0, 100.0, code="BLDPAD ST OH 2.5")
+        project.add_shot(25.0, 10.0, 100.0, code="BLDPAD OH 2.5")
         project.add_shot(30.0, 10.0, 100.0, code="BLDPAD RECT")
         project.add_shot(34.0, 10.0, 100.0, code="BLDPAD")
         project.add_shot(34.0, 14.0, 100.0, code="BLDPAD")
@@ -203,7 +207,7 @@ class CSTopoCoreTests(unittest.TestCase):
             project.add_shot(50.0, 15.0, 100.0, code="BLDPAD OH")
 
         self.assertTrue(project.undo_last_measurement())
-        self.assertEqual(project.next_point_number, 12)
+        self.assertEqual(project.next_point_number, 13)
         self.assertIn("SmoothCurve", {segment.segment_kind for segment in project.figure_segments})
 
     def test_pc_automatically_applies_pt_to_next_shot_and_draws_arc(self):
@@ -226,6 +230,84 @@ class CSTopoCoreTests(unittest.TestCase):
         self.assertAlmostEqual(arcs[0].survey_points[-1][0], pt.northing)
         self.assertAlmostEqual(arcs[0].survey_points[-1][1], pt.easting)
         self.assertNotIn([pc.point_number, pt.point_number], [segment.point_numbers for segment in project.figure_segments if segment.segment_kind == "Line"])
+
+    def test_curve_linework_uses_tenth_foot_sampling_metric(self):
+        def assert_tenth_foot_steps(points):
+            for previous, point in zip(points, points[1:]):
+                horizontal = math.hypot(point[0] - previous[0], point[1] - previous[1])
+                vertical = abs(point[2] - previous[2])
+                self.assertLessEqual(horizontal, 0.100001)
+                self.assertLessEqual(vertical, 0.100001)
+
+        project = CSTopoProject.default("Metric Arc")
+        project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
+        project.add_shot(10.0, 0.0, 100.0, code="BLDPAD")
+        project.set_pending_control_code("PC")
+        project.add_shot(20.0, 0.0, 100.0, code="BLDPAD")
+        project.add_shot(30.0, 10.0, 105.0, code="BLDPAD")
+        arcs = [segment for segment in project.figure_segments if segment.segment_kind == "Arc"]
+        self.assertEqual(len(arcs), 1)
+        self.assertGreater(len(arcs[0].survey_points), 49)
+        assert_tenth_foot_steps(arcs[0].survey_points)
+
+        project = CSTopoProject.default("Metric Smooth Curve")
+        project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
+        project.add_shot(10.0, 0.0, 100.0, code="BLDPAD SSC")
+        project.add_shot(15.0, 4.0, 103.0, code="BLDPAD")
+        project.add_shot(20.0, 0.0, 106.0, code="BLDPAD ESC")
+        curves = [segment for segment in project.figure_segments if segment.segment_kind == "SmoothCurve"]
+        self.assertEqual(len(curves), 1)
+        assert_tenth_foot_steps(curves[0].survey_points)
+
+    def test_oh_persists_until_cancel_and_suppresses_measured_line(self):
+        project = CSTopoProject.default("Persistent Offset")
+        project.add_shot(0.0, 0.0, 100.0, code="BLDPAD ST")
+        project.add_shot(10.0, 0.0, 100.0, code="BLDPAD")
+
+        project.set_pending_control_code("OH", "2.5")
+        offset_start = project.add_shot(10.0, 10.0, 100.0, code="BLDPAD")
+        offset_end = project.add_shot(20.0, 10.0, 100.0, code="BLDPAD")
+        offset_bend_end = project.add_shot(20.0, 20.0, 101.0, code="BLDPAD")
+        project.cancel_pending_control_code()
+        normal_start = project.add_shot(30.0, 10.0, 100.0, code="BLDPAD")
+        normal_end = project.add_shot(40.0, 10.0, 100.0, code="BLDPAD")
+
+        self.assertEqual(offset_start.code, "BLDPAD ST OH 2.5")
+        self.assertEqual(offset_end.code, "BLDPAD OH 2.5")
+        self.assertTrue(offset_start.starts_new_figure)
+        self.assertEqual(project.pending_control_code, "")
+        self.assertEqual(normal_start.code, "BLDPAD ST")
+
+        offset_segments = [segment for segment in project.figure_segments if segment.segment_kind == "OffsetLine"]
+        self.assertEqual(len(offset_segments), 1)
+        self.assertEqual(offset_segments[0].point_numbers, [offset_start.point_number, offset_end.point_number, offset_bend_end.point_number])
+        self.assertEqual(len(offset_segments[0].survey_points), 3)
+        self.assertAlmostEqual(offset_segments[0].survey_points[1][0], 17.5)
+        self.assertAlmostEqual(offset_segments[0].survey_points[1][1], 12.5)
+
+        line_point_numbers = [segment.point_numbers for segment in project.figure_segments if segment.segment_kind == "Line"]
+        self.assertNotIn([offset_start.point_number, offset_end.point_number], line_point_numbers)
+        self.assertNotIn([offset_end.point_number, offset_bend_end.point_number], line_point_numbers)
+        self.assertIn([normal_start.point_number, normal_end.point_number], line_point_numbers)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project_path = root / "persistent-offset.cstopo"
+            csv_path = root / "persistent-offset.csv"
+            project.save(project_path)
+            loaded = CSTopoProject.load(project_path)
+            export_csv(loaded, csv_path)
+
+            self.assertEqual(loaded.schema_version, "1.5")
+            self.assertEqual(loaded.shots[2].code, "BLDPAD ST OH 2.5")
+            self.assertEqual(loaded.shots[3].code, "BLDPAD OH 2.5")
+            self.assertEqual(loaded.shots[4].code, "BLDPAD OH 2.5")
+            self.assertTrue(loaded.shots[2].starts_new_figure)
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[2]["Code"], "BLDPAD ST OH 2.5")
+            self.assertEqual(rows[3]["Code"], "BLDPAD OH 2.5")
+            self.assertEqual(rows[4]["Code"], "BLDPAD OH 2.5")
 
     def test_npc_npt_requires_intermediate_curve_point(self):
         project = CSTopoProject.default("Non Tangent Arc")

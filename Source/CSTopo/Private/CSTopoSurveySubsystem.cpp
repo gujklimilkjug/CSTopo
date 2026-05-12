@@ -28,6 +28,7 @@
 namespace
 {
 constexpr ECollisionChannel CSTopoSurfaceCollisionChannel = ECC_GameTraceChannel1;
+constexpr double CSTopoLineworkSampleToleranceSourceUnits = 0.1;
 
 const TCHAR* CurrentSurfaceManifestSchemaVersion = TEXT("5.0");
 
@@ -79,6 +80,16 @@ double SourceWindowDistance2D(const FVector& A, const FVector& B)
 double MaxAbsVectorDelta(const FVector& A, const FVector& B)
 {
     return FMath::Max3(FMath::Abs(A.X - B.X), FMath::Abs(A.Y - B.Y), FMath::Abs(A.Z - B.Z));
+}
+
+int32 SampleCountForDelta(double HorizontalDistance, double VerticalDelta, double Tolerance = CSTopoLineworkSampleToleranceSourceUnits)
+{
+    if (Tolerance <= 0.0)
+    {
+        return 2;
+    }
+    const int32 Intervals = FMath::Max(1, FMath::CeilToInt(FMath::Max(FMath::Abs(HorizontalDistance), FMath::Abs(VerticalDelta)) / Tolerance));
+    return Intervals + 1;
 }
 
 bool IsCSTopoOwnedActor(const AActor* Actor)
@@ -469,6 +480,86 @@ void SuppressLineRange(TSet<FString>& SuppressedPairs, const FString& Code, cons
     }
 }
 
+struct FCSTopoOffsetSegment2D
+{
+    FVector2D Start = FVector2D::ZeroVector;
+    FVector2D End = FVector2D::ZeroVector;
+    FVector2D Direction = FVector2D::ZeroVector;
+};
+
+bool IntersectOffsetLines2D(const FVector2D& P1, const FVector2D& D1, const FVector2D& P2, const FVector2D& D2, FVector2D& OutIntersection)
+{
+    const double Cross = D1.X * D2.Y - D1.Y * D2.X;
+    if (FMath::Abs(Cross) <= 1.0e-9)
+    {
+        return false;
+    }
+
+    const FVector2D Delta = P2 - P1;
+    const double T = (Delta.X * D2.Y - Delta.Y * D2.X) / Cross;
+    OutIntersection = P1 + D1 * T;
+    return true;
+}
+
+bool BuildOffsetRunPoints(const TArray<const FCSTopoShotRecord*>& Run, const FString& ControlCode, double Distance, TArray<FVector>& OutPoints)
+{
+    OutPoints.Reset();
+    if (Run.Num() < 2)
+    {
+        return false;
+    }
+
+    if (ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase))
+    {
+        for (const FCSTopoShotRecord* Shot : Run)
+        {
+            if (Shot != nullptr)
+            {
+                OutPoints.Add(FVector(Shot->Northing, Shot->Easting, Shot->Elevation + Distance));
+            }
+        }
+        return OutPoints.Num() >= 2;
+    }
+
+    TArray<FCSTopoOffsetSegment2D> OffsetSegments;
+    for (int32 Index = 0; Index + 1 < Run.Num(); ++Index)
+    {
+        const FCSTopoShotRecord* Previous = Run[Index];
+        const FCSTopoShotRecord* Shot = Run[Index + 1];
+        if (Previous == nullptr || Shot == nullptr)
+        {
+            return false;
+        }
+
+        const FVector2D Delta(Shot->Northing - Previous->Northing, Shot->Easting - Previous->Easting);
+        const double Length = Delta.Size();
+        if (Length <= 1.0e-9)
+        {
+            return false;
+        }
+
+        const FVector2D Offset(-Delta.Y / Length * Distance, Delta.X / Length * Distance);
+        FCSTopoOffsetSegment2D Segment;
+        Segment.Start = FVector2D(Previous->Northing, Previous->Easting) + Offset;
+        Segment.End = FVector2D(Shot->Northing, Shot->Easting) + Offset;
+        Segment.Direction = Delta;
+        OffsetSegments.Add(Segment);
+    }
+
+    OutPoints.Add(FVector(OffsetSegments[0].Start.X, OffsetSegments[0].Start.Y, Run[0]->Elevation));
+    for (int32 Index = 1; Index + 1 < Run.Num(); ++Index)
+    {
+        FVector2D Corner;
+        if (!IntersectOffsetLines2D(OffsetSegments[Index - 1].Start, OffsetSegments[Index - 1].Direction, OffsetSegments[Index].Start, OffsetSegments[Index].Direction, Corner))
+        {
+            Corner = (OffsetSegments[Index - 1].End + OffsetSegments[Index].Start) * 0.5;
+        }
+        OutPoints.Add(FVector(Corner.X, Corner.Y, Run[Index]->Elevation));
+    }
+    OutPoints.Add(FVector(OffsetSegments.Last().End.X, OffsetSegments.Last().End.Y, Run.Last()->Elevation));
+    return OutPoints.Num() >= 2;
+}
+
 double NormalizeAngleDelta(double Delta, int32 Direction)
 {
     if (Direction >= 0)
@@ -508,10 +599,10 @@ bool CircleCenterFromThreeShots(const FCSTopoShotRecord& A, const FCSTopoShotRec
     return OutRadius > UE_DOUBLE_SMALL_NUMBER;
 }
 
-TArray<FVector> SampleArcPoints(double CenterE, double CenterN, double Radius, const FCSTopoShotRecord& Start, const FCSTopoShotRecord& End, int32 Direction, int32 Count = 49)
+TArray<FVector> SampleArcPoints(double CenterE, double CenterN, double Radius, const FCSTopoShotRecord& Start, const FCSTopoShotRecord& End, int32 Direction, double Tolerance = CSTopoLineworkSampleToleranceSourceUnits)
 {
     TArray<FVector> Points;
-    if (Radius <= UE_DOUBLE_SMALL_NUMBER || Count < 2)
+    if (Radius <= UE_DOUBLE_SMALL_NUMBER)
     {
         return Points;
     }
@@ -519,6 +610,7 @@ TArray<FVector> SampleArcPoints(double CenterE, double CenterN, double Radius, c
     const double StartAngle = FMath::Atan2(Start.Northing - CenterN, Start.Easting - CenterE);
     const double EndAngle = FMath::Atan2(End.Northing - CenterN, End.Easting - CenterE);
     const double Delta = NormalizeAngleDelta(EndAngle - StartAngle, Direction);
+    const int32 Count = SampleCountForDelta(FMath::Abs(Delta) * Radius, End.Elevation - Start.Elevation, Tolerance);
     for (int32 Index = 0; Index < Count; ++Index)
     {
         const double Alpha = static_cast<double>(Index) / static_cast<double>(Count - 1);
@@ -580,7 +672,39 @@ bool BuildTangentArcPoints(const FCSTopoShotRecord& Previous, const FCSTopoShotR
     return OutPoints.Num() >= 2;
 }
 
-TArray<FVector> BuildCatmullRomPoints(const TArray<FCSTopoShotRecord>& Shots, int32 FirstIndex, int32 LastIndex, int32 SamplesPerSpan = 8)
+FVector CatmullRomInterpolate(const TArray<FVector>& SourcePoints, int32 Index, double T)
+{
+    const FVector P0 = SourcePoints[FMath::Max(0, Index - 1)];
+    const FVector P1 = SourcePoints[Index];
+    const FVector P2 = SourcePoints[Index + 1];
+    const FVector P3 = SourcePoints[FMath::Min(SourcePoints.Num() - 1, Index + 2)];
+    const double T2 = T * T;
+    const double T3 = T2 * T;
+    return 0.5 * ((2.0 * P1) + (-P0 + P2) * T + (2.0 * P0 - 5.0 * P1 + 4.0 * P2 - P3) * T2 + (-P0 + 3.0 * P1 - 3.0 * P2 + P3) * T3);
+}
+
+bool PointDeltaExceedsTolerance(const FVector& A, const FVector& B, double Tolerance)
+{
+    const double Horizontal = FVector2D::Distance(FVector2D(A.X, A.Y), FVector2D(B.X, B.Y));
+    const double Vertical = FMath::Abs(B.Z - A.Z);
+    return Horizontal > Tolerance || Vertical > Tolerance;
+}
+
+void AppendAdaptiveCatmullRomSpan(TArray<FVector>& Points, const TArray<FVector>& SourcePoints, int32 SpanIndex, double T0, const FVector& P0, double T1, const FVector& P1, double Tolerance, int32 Depth = 0)
+{
+    if (Depth < 24 && PointDeltaExceedsTolerance(P0, P1, Tolerance))
+    {
+        const double MidT = (T0 + T1) * 0.5;
+        const FVector MidPoint = CatmullRomInterpolate(SourcePoints, SpanIndex, MidT);
+        AppendAdaptiveCatmullRomSpan(Points, SourcePoints, SpanIndex, T0, P0, MidT, MidPoint, Tolerance, Depth + 1);
+        AppendAdaptiveCatmullRomSpan(Points, SourcePoints, SpanIndex, MidT, MidPoint, T1, P1, Tolerance, Depth + 1);
+        return;
+    }
+
+    Points.Add(P1);
+}
+
+TArray<FVector> BuildCatmullRomPoints(const TArray<FCSTopoShotRecord>& Shots, int32 FirstIndex, int32 LastIndex, double Tolerance = CSTopoLineworkSampleToleranceSourceUnits)
 {
     TArray<FVector> SourcePoints;
     for (int32 Index = FirstIndex; Index <= LastIndex && Shots.IsValidIndex(Index); ++Index)
@@ -597,25 +721,13 @@ TArray<FVector> BuildCatmullRomPoints(const TArray<FCSTopoShotRecord>& Shots, in
     }
 
     TArray<FVector> Points;
+    Points.Add(SourcePoints[0]);
     for (int32 Index = 0; Index + 1 < SourcePoints.Num(); ++Index)
     {
-        const FVector P0 = SourcePoints[FMath::Max(0, Index - 1)];
-        const FVector P1 = SourcePoints[Index];
-        const FVector P2 = SourcePoints[Index + 1];
-        const FVector P3 = SourcePoints[FMath::Min(SourcePoints.Num() - 1, Index + 2)];
-        for (int32 Sample = 0; Sample < SamplesPerSpan; ++Sample)
-        {
-            if (Index > 0 && Sample == 0)
-            {
-                continue;
-            }
-            const double T = static_cast<double>(Sample) / static_cast<double>(SamplesPerSpan);
-            const double T2 = T * T;
-            const double T3 = T2 * T;
-            Points.Add(0.5 * ((2.0 * P1) + (-P0 + P2) * T + (2.0 * P0 - 5.0 * P1 + 4.0 * P2 - P3) * T2 + (-P0 + 3.0 * P1 - 3.0 * P2 + P3) * T3));
-        }
+        const FVector Start = CatmullRomInterpolate(SourcePoints, Index, 0.0);
+        const FVector End = CatmullRomInterpolate(SourcePoints, Index, 1.0);
+        AppendAdaptiveCatmullRomSpan(Points, SourcePoints, Index, 0.0, Start, 1.0, End, Tolerance);
     }
-    Points.Add(SourcePoints.Last());
     return Points;
 }
 
@@ -1323,10 +1435,19 @@ bool UCSTopoSurveySubsystem::SetPendingControlCode(const FString& ControlCode, c
 
     PendingControlCode = NormalizedControl;
     PendingControlParameter = NormalizedParameter;
+    bPendingControlStartsNewFigure = NormalizedControl.Equals(TEXT("OH"), ESearchCase::IgnoreCase) || NormalizedControl.Equals(TEXT("OV"), ESearchCase::IgnoreCase);
+    PendingControlBaseCode = NormalizeControlCode(ActiveProject.ActiveCode);
     bPendingControlAutomatic = false;
-    StatusMessage = PendingControlParameter.IsEmpty()
+    if (bPendingControlStartsNewFigure)
+    {
+        StatusMessage = FString::Printf(TEXT("%s %s active. The next measurement starts a new offset line; use Cancel Code to stop offsetting."), *PendingControlCode, *PendingControlParameter);
+    }
+    else
+    {
+        StatusMessage = PendingControlParameter.IsEmpty()
         ? FString::Printf(TEXT("%s will apply to the next measurement."), *PendingControlCode)
         : FString::Printf(TEXT("%s %s will apply to the next measurement."), *PendingControlCode, *PendingControlParameter);
+    }
     return true;
 }
 
@@ -1334,7 +1455,27 @@ void UCSTopoSurveySubsystem::ClearPendingControlCode()
 {
     PendingControlCode.Empty();
     PendingControlParameter.Empty();
+    bPendingControlStartsNewFigure = false;
+    PendingControlBaseCode.Empty();
     bPendingControlAutomatic = false;
+}
+
+void UCSTopoSurveySubsystem::CancelPendingControlCode(FString& StatusMessage)
+{
+    const bool bCanceledOffset = PendingControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase) || PendingControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase);
+    const FString OffsetCode = PendingControlCode;
+    ClearPendingControlCode();
+    if (bCanceledOffset)
+    {
+        PendingControlCode = TEXT("ST");
+        PendingControlParameter.Empty();
+        bPendingControlStartsNewFigure = false;
+        PendingControlBaseCode = NormalizeControlCode(ActiveProject.ActiveCode);
+        bPendingControlAutomatic = true;
+        StatusMessage = FString::Printf(TEXT("%s offset canceled. The next measurement starts a new normal line."), *OffsetCode);
+        return;
+    }
+    StatusMessage = TEXT("Control code selection canceled.");
 }
 
 FString UCSTopoSurveySubsystem::GetPendingControlCode() const
@@ -2568,10 +2709,24 @@ bool UCSTopoSurveySubsystem::GetCurrentSurveyMapPose(FVector2D& OutSurveyNe, FVe
 bool UCSTopoSurveySubsystem::GetCodeStyle(const FString& Code, FCSTopoCodeStyle& OutStyle) const
 {
     const FString NormalizedCode = NormalizeCode(Code);
-    const FCSTopoCodeStyle* Style = ActiveProject.CodePalette.FindByPredicate([&NormalizedCode](const FCSTopoCodeStyle& Candidate)
+    auto FindStyle = [this](const FString& StyleCode)
     {
-        return Candidate.Code.Equals(NormalizedCode, ESearchCase::IgnoreCase);
-    });
+        return ActiveProject.CodePalette.FindByPredicate([&StyleCode](const FCSTopoCodeStyle& Candidate)
+        {
+            return Candidate.Code.Equals(StyleCode, ESearchCase::IgnoreCase);
+        });
+    };
+
+    const FCSTopoCodeStyle* Style = FindStyle(NormalizedCode);
+    if (Style == nullptr)
+    {
+        TArray<FString> Tokens;
+        NormalizedCode.ParseIntoArrayWS(Tokens);
+        if (!Tokens.IsEmpty())
+        {
+            Style = FindStyle(Tokens[0]);
+        }
+    }
 
     if (Style == nullptr)
     {
@@ -3179,10 +3334,14 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
     }
 
     const FString BaseCode = NormalizeCode(ActiveProject.ActiveCode);
+    if (bPendingControlAutomatic && !PendingControlBaseCode.IsEmpty() && !PendingControlBaseCode.Equals(BaseCode, ESearchCase::IgnoreCase))
+    {
+        ClearPendingControlCode();
+    }
     const FString MeasurementCode = BuildNextMeasurementCode();
     const FString MeasurementControlCode = PendingControlCode;
     const FString MeasurementControlParameter = PendingControlParameter;
-    const bool bStartsNewLine = MeasurementControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase) || MeasurementControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase);
+    const bool bStartsNewLine = MeasurementControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase) || MeasurementControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase) || bPendingControlStartsNewFigure;
     const bool bJoinLinework = !MeasurementControlCode.Equals(TEXT("IG"), ESearchCase::IgnoreCase);
 
     if (Preview.bUsesSnap)
@@ -3814,11 +3973,44 @@ bool UCSTopoSurveySubsystem::RebuildUserTinPreview(FString& StatusMessage)
         return false;
     }
 
+    RebuildFigureSegments();
+
     TArray<FVector> RenderVertices;
     TArray<FVector2d> TinVertices;
     TArray<FLinearColor> Colors;
     TMap<int32, int32> VertexIndexByPointNumber;
+    TMap<FString, int32> VertexIndexBySourceXY;
     int32 BreaklineVertexCount = 0;
+    const FLinearColor BreaklineColor(1.0f, 0.52f, 0.08f, 1.0f);
+    const FLinearColor TinPointColor(0.94f, 0.86f, 0.28f, 1.0f);
+    auto SourceXYKey = [](double Easting, double Northing)
+    {
+        return FString::Printf(TEXT("%.4f|%.4f"), Easting, Northing);
+    };
+    auto AddTinVertex = [&](double Easting, double Northing, double Elevation, bool bBreaklineVertex)
+    {
+        const FString Key = SourceXYKey(Easting, Northing);
+        if (const int32* ExistingIndex = VertexIndexBySourceXY.Find(Key))
+        {
+            if (bBreaklineVertex && Colors.IsValidIndex(*ExistingIndex) && !Colors[*ExistingIndex].Equals(BreaklineColor))
+            {
+                Colors[*ExistingIndex] = BreaklineColor;
+                ++BreaklineVertexCount;
+            }
+            return *ExistingIndex;
+        }
+
+        const int32 VertexIndex = RenderVertices.Num();
+        VertexIndexBySourceXY.Add(Key, VertexIndex);
+        RenderVertices.Add(SourceToRenderPoint(*Source, FVector(Easting, Northing, Elevation)));
+        TinVertices.Add(FVector2d(Easting, Northing));
+        Colors.Add(bBreaklineVertex ? BreaklineColor : TinPointColor);
+        if (bBreaklineVertex)
+        {
+            ++BreaklineVertexCount;
+        }
+        return VertexIndex;
+    };
 
     for (const FCSTopoShotRecord& Shot : ActiveProject.Shots)
     {
@@ -3840,17 +4032,9 @@ bool UCSTopoSurveySubsystem::RebuildUserTinPreview(FString& StatusMessage)
             continue;
         }
 
-        const int32 VertexIndex = RenderVertices.Num();
+        const bool bBreaklineVertex = DoesCSTopoPointTypeCreateTinBreakline(PointType);
+        const int32 VertexIndex = AddTinVertex(Shot.Easting, Shot.Northing, Shot.Elevation, bBreaklineVertex);
         VertexIndexByPointNumber.Add(Shot.PointNumber, VertexIndex);
-        RenderVertices.Add(SourceToRenderPoint(*Source, FVector(Shot.Easting, Shot.Northing, Shot.Elevation)));
-        TinVertices.Add(FVector2d(Shot.Easting, Shot.Northing));
-        Colors.Add(DoesCSTopoPointTypeCreateTinBreakline(PointType)
-            ? FLinearColor(1.0f, 0.52f, 0.08f, 1.0f)
-            : FLinearColor(0.94f, 0.86f, 0.28f, 1.0f));
-        if (DoesCSTopoPointTypeCreateTinBreakline(PointType))
-        {
-            ++BreaklineVertexCount;
-        }
     }
 
     if (RenderVertices.Num() < 3)
@@ -3885,46 +4069,28 @@ bool UCSTopoSurveySubsystem::RebuildUserTinPreview(FString& StatusMessage)
         BreaklineEdges.Add(UE::Geometry::FIndex2i(A, B));
     };
 
-    for (const FCSTopoFigureRecord& Figure : ActiveProject.Figures)
+    for (const FCSTopoFigureSegmentRecord& Segment : ActiveProject.FigureSegments)
     {
-        FString PointType = Figure.Style.PointType;
-        if (PointType.IsEmpty())
-        {
-            FCSTopoCodeStyle Style;
-            if (GetCodeStyle(Figure.Code, Style))
-            {
-                PointType = Style.PointType;
-            }
-        }
-        if (!DoesCSTopoPointTypeCreateTinBreakline(PointType) || Figure.PointNumbers.Num() < 2)
+        if (Segment.SurveyPoints.Num() < 2)
         {
             continue;
         }
 
-        for (int32 Index = 0; Index + 1 < Figure.PointNumbers.Num(); ++Index)
+        FCSTopoCodeStyle Style;
+        if (!GetCodeStyle(Segment.Code, Style) || !DoesCSTopoPointTypeCreateTinBreakline(Style.PointType))
         {
-            const int32* A = VertexIndexByPointNumber.Find(Figure.PointNumbers[Index]);
-            const int32* B = VertexIndexByPointNumber.Find(Figure.PointNumbers[Index + 1]);
-            if (A == nullptr || B == nullptr)
-            {
-                ++SkippedBreaklineSegments;
-                continue;
-            }
-            AddBreaklineEdge(*A, *B);
+            continue;
         }
 
-        if (Figure.bLoopClosed)
+        int32 PreviousVertexIndex = INDEX_NONE;
+        for (const FVector& SurveyPoint : Segment.SurveyPoints)
         {
-            const int32* A = VertexIndexByPointNumber.Find(Figure.PointNumbers.Last());
-            const int32* B = VertexIndexByPointNumber.Find(Figure.PointNumbers[0]);
-            if (A == nullptr || B == nullptr)
+            const int32 VertexIndex = AddTinVertex(SurveyPoint.Y, SurveyPoint.X, SurveyPoint.Z, true);
+            if (PreviousVertexIndex != INDEX_NONE)
             {
-                ++SkippedBreaklineSegments;
+                AddBreaklineEdge(PreviousVertexIndex, VertexIndex);
             }
-            else
-            {
-                AddBreaklineEdge(*A, *B);
-            }
+            PreviousVertexIndex = VertexIndex;
         }
     }
 
@@ -4427,12 +4593,26 @@ bool UCSTopoSurveySubsystem::ValidateControlParameter(const FString& ControlCode
 FString UCSTopoSurveySubsystem::BuildNextMeasurementCode() const
 {
     const FString BaseCode = NormalizeControlCode(ActiveProject.ActiveCode);
-    return PendingControlCode.IsEmpty() ? BaseCode : FString::Printf(TEXT("%s %s"), *BaseCode, *PendingControlCode);
+    TArray<FString> Parts;
+    Parts.Add(BaseCode);
+    if (bPendingControlStartsNewFigure)
+    {
+        Parts.Add(TEXT("ST"));
+    }
+    if (!PendingControlCode.IsEmpty())
+    {
+        Parts.Add(PendingControlCode);
+        if ((PendingControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase) || PendingControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase)) && !PendingControlParameter.IsEmpty())
+        {
+            Parts.Add(PendingControlParameter);
+        }
+    }
+    return FString::Join(Parts, TEXT(" "));
 }
 
 void UCSTopoSurveySubsystem::ApplyControlBeforeShot(const FString& BaseCode, const FString& ControlCode)
 {
-    if (ControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase) || ControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase))
+    if (ControlCode.Equals(TEXT("ST"), ESearchCase::IgnoreCase) || ControlCode.Equals(TEXT("RECT"), ESearchCase::IgnoreCase) || bPendingControlStartsNewFigure)
     {
         UCSTopoProjectLibrary::SplitFigure(ActiveProject, BaseCode);
     }
@@ -4474,11 +4654,22 @@ void UCSTopoSurveySubsystem::ApplyControlAfterShot(const FCSTopoShotRecord& Shot
     }
 
     const bool bArmAutomaticPt = Shot.ControlCode.Equals(TEXT("PC"), ESearchCase::IgnoreCase);
-    ClearPendingControlCode();
+    const bool bKeepPersistentOffset = (Shot.ControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase))
+        && PendingControlCode.Equals(Shot.ControlCode, ESearchCase::IgnoreCase)
+        && PendingControlParameter.Equals(Shot.ControlParameter, ESearchCase::IgnoreCase);
+    if (bKeepPersistentOffset)
+    {
+        bPendingControlStartsNewFigure = false;
+    }
+    else
+    {
+        ClearPendingControlCode();
+    }
     if (bArmAutomaticPt)
     {
         PendingControlCode = TEXT("PT");
         PendingControlParameter.Empty();
+        PendingControlBaseCode = Shot.BaseCode;
         bPendingControlAutomatic = true;
     }
     RebuildFigureSegments();
@@ -4647,6 +4838,13 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
                 {
                     continue;
                 }
+                if (A->ControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase)
+                    || A->ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase)
+                    || B->ControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase)
+                    || B->ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase))
+                {
+                    continue;
+                }
                 AddSegment(ECSTopoFigureSegmentKind::Line, Figure.Code, { A->PointNumber, B->PointNumber }, { SurveyPointFromShot(*A), SurveyPointFromShot(*B) }, TEXT(""), TEXT(""), B->PointNumber);
             }
         }
@@ -4658,6 +4856,58 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
             {
                 AddSegment(ECSTopoFigureSegmentKind::Line, Figure.Code, { A->PointNumber, B->PointNumber }, { SurveyPointFromShot(*A), SurveyPointFromShot(*B) }, TEXT("CLS"), TEXT(""), A->PointNumber);
             }
+        }
+    }
+
+    for (const TPair<FString, TArray<FCSTopoShotRecord>>& Pair : ShotsByBaseCode)
+    {
+        const FString BaseCode = Pair.Key;
+        const TArray<FCSTopoShotRecord>& BaseShots = Pair.Value;
+        int32 Index = 0;
+        while (Index < BaseShots.Num())
+        {
+            const FCSTopoShotRecord& Shot = BaseShots[Index];
+            const bool bOffsetControl = Shot.ControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase);
+            if (!bOffsetControl)
+            {
+                ++Index;
+                continue;
+            }
+
+            const FString ControlCode = Shot.ControlCode;
+            const FString ControlParameter = Shot.ControlParameter;
+            TArray<const FCSTopoShotRecord*> Run;
+            Run.Add(&Shot);
+            ++Index;
+            while (Index < BaseShots.Num()
+                && BaseShots[Index].ControlCode.Equals(ControlCode, ESearchCase::IgnoreCase)
+                && BaseShots[Index].ControlParameter.Equals(ControlParameter, ESearchCase::IgnoreCase))
+            {
+                Run.Add(&BaseShots[Index]);
+                ++Index;
+            }
+
+            if (Run.Num() < 2)
+            {
+                continue;
+            }
+
+            const double Distance = FCString::Atod(*ControlParameter);
+            TArray<FVector> Points;
+            if (!BuildOffsetRunPoints(Run, ControlCode, Distance, Points))
+            {
+                continue;
+            }
+
+            TArray<int32> PointNumbers;
+            for (const FCSTopoShotRecord* RunShot : Run)
+            {
+                if (RunShot != nullptr)
+                {
+                    PointNumbers.Add(RunShot->PointNumber);
+                }
+            }
+            AddSegment(ECSTopoFigureSegmentKind::OffsetLine, BaseCode, PointNumbers, Points, ControlCode, ControlParameter, Run.Last()->PointNumber);
         }
     }
 
@@ -4693,23 +4943,6 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
                 AddSegment(ECSTopoFigureSegmentKind::JoinLine, BaseCode, { Target->PointNumber, Shot.PointNumber }, { SurveyPointFromShot(*Target), SurveyPointFromShot(Shot) }, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
             }
         }
-        else if ((Shot.ControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase) || Shot.ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase)) && Previous != nullptr)
-        {
-            const double Distance = FCString::Atod(*Shot.ControlParameter);
-            TArray<FVector> Points;
-            if (Shot.ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase))
-            {
-                Points = { FVector(Previous->Northing, Previous->Easting, Previous->Elevation + Distance), FVector(Shot.Northing, Shot.Easting, Shot.Elevation + Distance) };
-            }
-            else
-            {
-                const FVector2D Delta(Shot.Northing - Previous->Northing, Shot.Easting - Previous->Easting);
-                const double Length = FMath::Max(Delta.Size(), 0.000001);
-                const FVector2D Offset(-Delta.Y / Length * Distance, Delta.X / Length * Distance);
-                Points = { FVector(Previous->Northing + Offset.X, Previous->Easting + Offset.Y, Previous->Elevation), FVector(Shot.Northing + Offset.X, Shot.Easting + Offset.Y, Shot.Elevation) };
-            }
-            AddSegment(ECSTopoFigureSegmentKind::OffsetLine, BaseCode, { Previous->PointNumber, Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
-        }
         else if (Shot.ControlCode.Equals(TEXT("SCR"), ESearchCase::IgnoreCase))
         {
             double Radius = FCString::Atod(*Shot.ControlParameter);
@@ -4721,9 +4954,10 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
             if (Radius > 0.0)
             {
                 TArray<FVector> Points;
-                for (int32 Index = 0; Index <= 48; ++Index)
+                const int32 Count = SampleCountForDelta(2.0 * UE_DOUBLE_PI * Radius, 0.0);
+                for (int32 Index = 0; Index < Count; ++Index)
                 {
-                    const double Angle = 2.0 * UE_DOUBLE_PI * static_cast<double>(Index) / 48.0;
+                    const double Angle = 2.0 * UE_DOUBLE_PI * static_cast<double>(Index) / static_cast<double>(Count - 1);
                     Points.Add(FVector(Shot.Northing + FMath::Sin(Angle) * Radius, Shot.Easting + FMath::Cos(Angle) * Radius, Shot.Elevation));
                 }
                 AddSegment(ECSTopoFigureSegmentKind::Circle, BaseCode, { Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);
@@ -4746,9 +4980,10 @@ void UCSTopoSurveySubsystem::RebuildFigureSegments()
                 const double UY = ((AX * AX + AY * AY) * (CX - BX) + (BX * BX + BY * BY) * (AX - CX) + (CX * CX + CY * CY) * (BX - AX)) / D;
                 const double Radius = FVector2D::Distance(FVector2D(AX, AY), FVector2D(UX, UY));
                 TArray<FVector> Points;
-                for (int32 Index = 0; Index <= 48; ++Index)
+                const int32 Count = SampleCountForDelta(2.0 * UE_DOUBLE_PI * Radius, 0.0);
+                for (int32 Index = 0; Index < Count; ++Index)
                 {
-                    const double Angle = 2.0 * UE_DOUBLE_PI * static_cast<double>(Index) / 48.0;
+                    const double Angle = 2.0 * UE_DOUBLE_PI * static_cast<double>(Index) / static_cast<double>(Count - 1);
                     Points.Add(FVector(UY + FMath::Sin(Angle) * Radius, UX + FMath::Cos(Angle) * Radius, Shot.Elevation));
                 }
                 AddSegment(ECSTopoFigureSegmentKind::Circle, BaseCode, { A.PointNumber, B.PointNumber, Shot.PointNumber }, Points, Shot.ControlCode, Shot.ControlParameter, Shot.PointNumber);

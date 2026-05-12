@@ -877,8 +877,9 @@ void ACSTopoSurveyPawn::EnsureSurveyVisualization()
         PointMarkerMeshComponent->SetCollisionResponseToAllChannels(ECR_Ignore);
         PointMarkerMeshComponent->SetCastShadow(false);
         PointMarkerMeshComponent->bCastDynamicShadow = false;
+        static UMaterialInterface* PointColorMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/PointSetComponentMaterial.PointSetComponentMaterial"));
         static UMaterialInterface* VertexColorMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/VertexColorMaterial.VertexColorMaterial"));
-        PointMarkerMeshComponent->SetMaterial(0, VertexColorMaterial != nullptr ? VertexColorMaterial : UMaterial::GetDefaultMaterial(MD_Surface));
+        PointMarkerMeshComponent->SetMaterial(0, PointColorMaterial != nullptr ? PointColorMaterial : (VertexColorMaterial != nullptr ? VertexColorMaterial : UMaterial::GetDefaultMaterial(MD_Surface)));
     }
 }
 
@@ -1072,6 +1073,11 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
         Label->SetVerticalAlignment(EVRTA_TextCenter);
         Label->SetWorldSize(24.0f);
         Label->SetTextRenderColor(FColor::White);
+        static UMaterialInterface* OpaqueTextMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/DefaultTextMaterialOpaque.DefaultTextMaterialOpaque"));
+        if (OpaqueTextMaterial != nullptr)
+        {
+            Label->SetTextMaterial(OpaqueTextMaterial);
+        }
         Label->SetCastShadow(false);
         Label->bCastDynamicShadow = false;
         PointLabelComponents.Add(Label);
@@ -1088,6 +1094,11 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
         Label->SetVerticalAlignment(EVRTA_TextCenter);
         Label->SetWorldSize(30.0f);
         Label->SetTextRenderColor(FColor::White);
+        static UMaterialInterface* OpaqueTextMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/DefaultTextMaterialOpaque.DefaultTextMaterialOpaque"));
+        if (OpaqueTextMaterial != nullptr)
+        {
+            Label->SetTextMaterial(OpaqueTextMaterial);
+        }
         Label->SetCastShadow(false);
         Label->bCastDynamicShadow = false;
         PointLabelBoldComponents.Add(Label);
@@ -1121,7 +1132,9 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
         const float LabelWorldSize = Candidate.bIsSnapTarget ? 29.0f : 24.0f;
 
         Label->SetText(FText::FromString(LabelText));
-        Label->SetTextRenderColor(Candidate.Color);
+        FColor LabelColor = Candidate.Color;
+        LabelColor.A = 255;
+        Label->SetTextRenderColor(LabelColor);
         Label->SetWorldSize(LabelWorldSize);
         Label->SetWorldLocation(LabelLocation);
         Label->SetWorldRotation(LabelRotation);
@@ -1135,7 +1148,7 @@ void ACSTopoSurveyPawn::UpdatePointLabels()
                 const FVector CameraRight = Camera->GetRightVector();
                 const FVector CameraUp = Camera->GetUpVector();
                 BoldLabel->SetText(FText::FromString(LabelText));
-                BoldLabel->SetTextRenderColor(Candidate.Color);
+                BoldLabel->SetTextRenderColor(LabelColor);
                 BoldLabel->SetWorldSize(LabelWorldSize);
                 BoldLabel->SetWorldLocation(LabelLocation + CameraRight * 1.5f + CameraUp * 1.5f);
                 BoldLabel->SetWorldRotation(LabelRotation);
@@ -1171,12 +1184,12 @@ FColor ACSTopoSurveyPawn::GetShotColor(const FCSTopoShotRecord& Shot) const
     if (Survey != nullptr)
     {
         const FString StyleCode = Shot.BaseCode.IsEmpty() ? Shot.Code : Shot.BaseCode;
-        for (const FCSTopoCodeStyle& Style : Survey->ActiveProject.CodePalette)
+        FCSTopoCodeStyle Style;
+        if (Survey->GetCodeStyle(StyleCode, Style))
         {
-            if (Style.Code.Equals(StyleCode, ESearchCase::IgnoreCase))
-            {
-                return Style.Color.ToFColor(true);
-            }
+            FColor Color = Style.Color.ToFColor(true);
+            Color.A = 255;
+            return Color;
         }
     }
 

@@ -680,6 +680,9 @@ struct FCSTopoShotRecord
     FString ControlParameter;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    bool bStartsNewFigure = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FGuid FigureId;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
@@ -779,7 +782,7 @@ struct FCSTopoProjectDocument
     GENERATED_BODY()
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
-    FString SchemaVersion = TEXT("1.4");
+    FString SchemaVersion = TEXT("1.5");
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FString ProjectName = TEXT("Untitled CSTopo Project");

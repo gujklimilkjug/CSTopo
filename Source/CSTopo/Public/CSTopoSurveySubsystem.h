@@ -186,6 +186,9 @@ public:
     void ClearPendingControlCode();
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
+    void CancelPendingControlCode(FString& StatusMessage);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
     FString GetPendingControlCode() const;
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Survey")
@@ -293,6 +296,8 @@ private:
     FString UserTinStatusLine = TEXT("User TIN hidden.");
     FString PendingControlCode;
     FString PendingControlParameter;
+    bool bPendingControlStartsNewFigure = false;
+    FString PendingControlBaseCode;
     bool bPendingControlAutomatic = false;
     TArray<FCSTopoControlCodeDefinition> ControlCodeDefinitions;
 

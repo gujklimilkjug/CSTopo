@@ -138,10 +138,14 @@ bool IsKnownControlCode(const FString& Code)
     return NormalizedCode.Equals(TEXT("PT"), ESearchCase::IgnoreCase) || LoadKnownControlCodes().Contains(NormalizedCode);
 }
 
-void ParseMeasurementCode(const FString& InCode, FString& OutBaseCode, FString& OutControlCode, FString& OutParameter)
+void ParseMeasurementCode(const FString& InCode, FString& OutBaseCode, FString& OutControlCode, FString& OutParameter, bool* bOutStartsNewFigure = nullptr)
 {
     TArray<FString> Tokens;
     InCode.TrimStartAndEnd().ParseIntoArrayWS(Tokens);
+    if (bOutStartsNewFigure != nullptr)
+    {
+        *bOutStartsNewFigure = false;
+    }
     if (Tokens.IsEmpty())
     {
         OutBaseCode.Empty();
@@ -151,7 +155,19 @@ void ParseMeasurementCode(const FString& InCode, FString& OutBaseCode, FString& 
 
     OutBaseCode = Tokens[0].TrimStartAndEnd().ToUpper();
     OutControlCode.Empty();
-    if (Tokens.Num() >= 2 && IsKnownControlCode(Tokens[1]))
+    if (Tokens.Num() >= 3 && Tokens[1].Equals(TEXT("ST"), ESearchCase::IgnoreCase) && IsKnownControlCode(Tokens[2]))
+    {
+        if (bOutStartsNewFigure != nullptr)
+        {
+            *bOutStartsNewFigure = true;
+        }
+        OutControlCode = Tokens[2].TrimStartAndEnd().ToUpper();
+        if (OutParameter.IsEmpty() && Tokens.Num() >= 4)
+        {
+            OutParameter = Tokens[3].TrimStartAndEnd().ToUpper();
+        }
+    }
+    else if (Tokens.Num() >= 2 && IsKnownControlCode(Tokens[1]))
     {
         OutControlCode = Tokens[1].TrimStartAndEnd().ToUpper();
         if (OutParameter.IsEmpty() && Tokens.Num() >= 3)
@@ -161,9 +177,23 @@ void ParseMeasurementCode(const FString& InCode, FString& OutBaseCode, FString& 
     }
 }
 
-FString BuildDisplayShotCode(const FString& BaseCode, const FString& ControlCode)
+FString BuildDisplayShotCode(const FString& BaseCode, const FString& ControlCode, const FString& ControlParameter = TEXT(""), bool bStartsNewFigure = false)
 {
-    return ControlCode.IsEmpty() ? BaseCode : FString::Printf(TEXT("%s %s"), *BaseCode, *ControlCode);
+    TArray<FString> Parts;
+    Parts.Add(BaseCode);
+    if (bStartsNewFigure)
+    {
+        Parts.Add(TEXT("ST"));
+    }
+    if (!ControlCode.IsEmpty())
+    {
+        Parts.Add(ControlCode);
+        if ((ControlCode.Equals(TEXT("OH"), ESearchCase::IgnoreCase) || ControlCode.Equals(TEXT("OV"), ESearchCase::IgnoreCase)) && !ControlParameter.IsEmpty())
+        {
+            Parts.Add(ControlParameter);
+        }
+    }
+    return FString::Join(Parts, TEXT(" "));
 }
 
 }
@@ -173,7 +203,7 @@ FCSTopoProjectDocument UCSTopoProjectLibrary::CreateDefaultProject(const FString
     FCSTopoProjectDocument Project;
     Project.ProjectName = ProjectName.IsEmpty() ? TEXT("Untitled CSTopo Project") : ProjectName;
 
-    Project.SchemaVersion = TEXT("1.4");
+    Project.SchemaVersion = TEXT("1.5");
     Project.CodePalette = LoadBuiltInCodePalette();
     Project.ActiveCode = Project.CodePalette.IsEmpty() ? TEXT("") : Project.CodePalette[0].Code;
     if (Project.CodePalette.IsEmpty())
@@ -187,7 +217,7 @@ bool UCSTopoProjectLibrary::SaveProjectToFile(const FCSTopoProjectDocument& Proj
 {
     const FString NormalizedFilePath = NormalizeCSTopoFilePath(FilePath);
     FCSTopoProjectDocument ProjectToSave = Project;
-    ProjectToSave.SchemaVersion = TEXT("1.4");
+    ProjectToSave.SchemaVersion = TEXT("1.5");
     if (ProjectToSave.CacheManifestPath.IsEmpty())
     {
         ProjectToSave.CacheManifestPath = UCSTopoPointCloudImport::BuildDefaultCacheManifestPath(NormalizedFilePath);
@@ -242,7 +272,8 @@ bool UCSTopoProjectLibrary::LoadProjectFromFile(const FString& FilePath, FCSTopo
 
     const bool bLegacyLoopClosureSemantics =
         !Project.SchemaVersion.Equals(TEXT("1.3"), ESearchCase::CaseSensitive)
-        && !Project.SchemaVersion.Equals(TEXT("1.4"), ESearchCase::CaseSensitive);
+        && !Project.SchemaVersion.Equals(TEXT("1.4"), ESearchCase::CaseSensitive)
+        && !Project.SchemaVersion.Equals(TEXT("1.5"), ESearchCase::CaseSensitive);
     if (bLegacyLoopClosureSemantics)
     {
         for (FCSTopoFigureRecord& Figure : Project.Figures)
@@ -253,7 +284,7 @@ bool UCSTopoProjectLibrary::LoadProjectFromFile(const FString& FilePath, FCSTopo
             }
         }
     }
-    Project.SchemaVersion = TEXT("1.4");
+    Project.SchemaVersion = TEXT("1.5");
     ApplyBuiltInCodeMetadata(Project);
 
     if (Project.CacheManifestPath.IsEmpty())
@@ -381,7 +412,8 @@ void UCSTopoProjectLibrary::ApplyBuiltInCodeMetadata(FCSTopoProjectDocument& Pro
             FString ParsedBaseCode;
             FString ParsedControlCode;
             FString ParsedParameter = Shot.ControlParameter;
-            ParseMeasurementCode(Shot.Code, ParsedBaseCode, ParsedControlCode, ParsedParameter);
+            bool bParsedStartsNewFigure = false;
+            ParseMeasurementCode(Shot.Code, ParsedBaseCode, ParsedControlCode, ParsedParameter, &bParsedStartsNewFigure);
             if (Shot.BaseCode.IsEmpty())
             {
                 Shot.BaseCode = ParsedBaseCode.IsEmpty() ? Shot.Code : ParsedBaseCode;
@@ -394,6 +426,11 @@ void UCSTopoProjectLibrary::ApplyBuiltInCodeMetadata(FCSTopoProjectDocument& Pro
             {
                 Shot.ControlParameter = ParsedParameter;
             }
+            if (!Shot.bStartsNewFigure)
+            {
+                Shot.bStartsNewFigure = bParsedStartsNewFigure;
+            }
+            Shot.Code = BuildDisplayShotCode(Shot.BaseCode, Shot.ControlCode, Shot.ControlParameter, Shot.bStartsNewFigure);
         }
     }
 
@@ -565,7 +602,8 @@ FCSTopoShotRecord UCSTopoProjectLibrary::AddFittedShot(FCSTopoProjectDocument& P
     FString BaseCode;
     FString ControlCode;
     FString ResolvedControlParameter = ControlParameter;
-    ParseMeasurementCode(Code, BaseCode, ControlCode, ResolvedControlParameter);
+    bool bStartsNewFigure = false;
+    ParseMeasurementCode(Code, BaseCode, ControlCode, ResolvedControlParameter, &bStartsNewFigure);
 
     const FCSTopoCodeStyle Style = FindOrCreateStyle(Project, BaseCode);
     FCSTopoFigureRecord* Figure = nullptr;
@@ -579,10 +617,11 @@ FCSTopoShotRecord UCSTopoProjectLibrary::AddFittedShot(FCSTopoProjectDocument& P
     Shot.Northing = Northing;
     Shot.Easting = Easting;
     Shot.Elevation = Elevation;
-    Shot.Code = BuildDisplayShotCode(BaseCode, ControlCode);
+    Shot.Code = BuildDisplayShotCode(BaseCode, ControlCode, ResolvedControlParameter, bStartsNewFigure);
     Shot.BaseCode = BaseCode;
     Shot.ControlCode = ControlCode;
     Shot.ControlParameter = ResolvedControlParameter;
+    Shot.bStartsNewFigure = bStartsNewFigure;
     if (Figure != nullptr)
     {
         Shot.FigureId = Figure->FigureId;

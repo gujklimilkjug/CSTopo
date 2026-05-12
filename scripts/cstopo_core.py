@@ -21,6 +21,7 @@ SURFACE_MANIFEST_SCHEMA_VERSION = "5.0"
 SURFACE_BUILD_METHOD_TIN = "BufferedDelaunayTIN"
 SURFACE_BUILD_METHOD_GLOBAL_TIN = "GlobalDelaunayTIN"
 SOURCE_POINT_PRECISION = 0.01
+LINEWORK_SAMPLE_TOLERANCE_SOURCE_UNITS = 0.1
 TIN_BOUNDARY_MODE_SUPPORT = "SupportBoundary"
 SURFACE_COLLISION_MODE_STITCHED_TIN = "RuntimeVisibleStitchedTIN"
 BUILT_IN_CODE_LIST_PATH = Path(__file__).resolve().parents[1] / "Config" / "CSTopoCodeList.json"
@@ -116,6 +117,7 @@ class ParsedControlCommand:
     base_code: str
     control_code: str = ""
     parameter: str = ""
+    starts_new_figure: bool = False
 
 
 def load_builtin_code_palette() -> List[CodeStyle]:
@@ -189,6 +191,13 @@ def parse_control_command(text: str, active_code: str = "") -> ParsedControlComm
             control_code=tokens[0],
             parameter=tokens[1] if len(tokens) > 1 else "",
         )
+    if len(tokens) >= 3 and tokens[1] == "ST" and is_known_control_code(tokens[2]):
+        return ParsedControlCommand(
+            base_code=tokens[0],
+            control_code=tokens[2],
+            parameter=tokens[3] if len(tokens) > 3 else "",
+            starts_new_figure=True,
+        )
     if len(tokens) >= 2 and is_known_control_code(tokens[1]):
         return ParsedControlCommand(
             base_code=tokens[0],
@@ -198,10 +207,17 @@ def parse_control_command(text: str, active_code: str = "") -> ParsedControlComm
     return ParsedControlCommand(base_code=tokens[0])
 
 
-def measurement_display_code(base_code: str, control_code: str = "") -> str:
+def measurement_display_code(base_code: str, control_code: str = "", control_parameter: str = "", starts_new_figure: bool = False) -> str:
     base = base_code.strip().upper()
     control = control_code.strip().upper()
-    return f"{base} {control}" if control else base
+    parts = [base]
+    if starts_new_figure:
+        parts.append("ST")
+    if control:
+        parts.append(control)
+        if control in {"OH", "OV"} and control_parameter.strip():
+            parts.append(control_parameter.strip().upper())
+    return " ".join(parts)
 
 
 def builtin_code_style(code: str) -> Optional[CodeStyle]:
@@ -333,6 +349,7 @@ class ShotRecord:
     base_code: str = ""
     control_code: str = ""
     control_parameter: str = ""
+    starts_new_figure: bool = False
     fit_type: str = "PlaneLeastSquares"
     fit_residual: float = 0.0
     source_cloud_id: str = ""
@@ -370,7 +387,7 @@ class FigureSegmentRecord:
 
 @dataclass
 class CSTopoProject:
-    schema_version: str = "1.4"
+    schema_version: str = "1.5"
     project_name: str = "Untitled CSTopo Project"
     active_code: str = ""
     active_point_cloud_id: str = ""
@@ -387,13 +404,14 @@ class CSTopoProject:
     figure_segments: List[FigureSegmentRecord] = field(default_factory=list)
     pending_control_code: str = ""
     pending_control_parameter: str = ""
+    pending_control_starts_new_figure: bool = False
 
     @classmethod
     def default(cls, project_name: str = "Untitled CSTopo Project") -> "CSTopoProject":
         code_palette = load_builtin_code_palette()
         return cls(
             project_name=project_name,
-            schema_version="1.4",
+            schema_version="1.5",
             active_code=code_palette[0].code if code_palette else "",
             code_palette=code_palette,
         )
@@ -422,10 +440,18 @@ class CSTopoProject:
             raise ValueError(f"Unknown CSTopo control code: {control_code}")
         self.pending_control_code = normalized
         self.pending_control_parameter = parameter.strip().upper()
+        self.pending_control_starts_new_figure = normalized in {"OH", "OV"}
 
     def clear_pending_control_code(self) -> None:
         self.pending_control_code = ""
         self.pending_control_parameter = ""
+        self.pending_control_starts_new_figure = False
+
+    def cancel_pending_control_code(self) -> None:
+        canceled_offset = self.pending_control_code in {"OH", "OV"}
+        self.clear_pending_control_code()
+        if canceled_offset:
+            self.pending_control_code = "ST"
 
     def _validate_control_parameter(self, control_code: str, parameter: str) -> None:
         definition = control_definition(control_code)
@@ -477,6 +503,7 @@ class CSTopoProject:
         active_code = parsed.base_code or self.active_code
         control_code = parsed.control_code or self.pending_control_code
         control_parameter = parsed.parameter or self.pending_control_parameter
+        starts_new_figure = parsed.starts_new_figure or self.pending_control_starts_new_figure
         if control_code and control_definition(control_code) is None and control_code not in INTERNAL_CONTROL_CODES:
             raise ValueError(f"Unknown CSTopo control code: {control_code}")
         self._validate_control_parameter(control_code, control_parameter)
@@ -484,7 +511,7 @@ class CSTopoProject:
         style = self.style_for(active_code)
         if not style.visible and builtin_code_style(active_code) is None:
             raise ValueError(f"Code is not in the CSTopo Code List: {active_code}")
-        if control_code in {"ST", "RECT"}:
+        if control_code in {"ST", "RECT"} or starts_new_figure:
             self.split_figure(active_code)
         join_linework = control_code != "IG"
         figure = self.open_figure_for(active_code) if join_linework and point_type_creates_figure_linework(style.point_type) else None
@@ -493,11 +520,12 @@ class CSTopoProject:
             northing=northing,
             easting=easting,
             elevation=elevation,
-            code=measurement_display_code(active_code, control_code),
+            code=measurement_display_code(active_code, control_code, control_parameter, starts_new_figure),
             figure_id=figure.figure_id if figure is not None else "",
             base_code=active_code,
             control_code=control_code,
             control_parameter=control_parameter,
+            starts_new_figure=starts_new_figure,
             fit_residual=fit_residual,
             source_cloud_id=source_cloud_id,
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -514,7 +542,10 @@ class CSTopoProject:
             self.close_figure(active_code)
         elif self._shot_completes_rectangle(active_code, shot.point_number):
             self.split_figure(active_code)
-        self.clear_pending_control_code()
+        if control_code in {"OH", "OV"} and self.pending_control_code == control_code:
+            self.pending_control_starts_new_figure = False
+        else:
+            self.clear_pending_control_code()
         if control_code == "PC":
             self.pending_control_code = "PT"
         self.rebuild_figure_segments()
@@ -575,8 +606,9 @@ class CSTopoProject:
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.schema_version = "1.4"
+        self.schema_version = "1.5"
         backfill_code_metadata(self)
+        self.rebuild_figure_segments()
         if not self.cache_manifest_path:
             self.cache_manifest_path = str(build_default_cache_manifest_path(path))
         manifest = build_cache_manifest(self, path)
@@ -707,16 +739,18 @@ def shot_from_dict(raw: dict) -> ShotRecord:
     base_code = raw.get("base_code", raw.get("baseCode", raw.get("BaseCode", parsed.base_code or code)))
     control_code = raw.get("control_code", raw.get("controlCode", raw.get("ControlCode", parsed.control_code)))
     control_parameter = raw.get("control_parameter", raw.get("controlParameter", raw.get("ControlParameter", parsed.parameter)))
+    starts_new_figure = raw.get("starts_new_figure", raw.get("bStartsNewFigure", raw.get("StartsNewFigure", parsed.starts_new_figure)))
     return ShotRecord(
         point_number=raw.get("point_number", raw.get("PointNumber", 1)),
         northing=raw.get("northing", raw.get("Northing", 0.0)),
         easting=raw.get("easting", raw.get("Easting", 0.0)),
         elevation=raw.get("elevation", raw.get("Elevation", 0.0)),
-        code=measurement_display_code(base_code, control_code),
+        code=measurement_display_code(base_code, control_code, control_parameter, starts_new_figure),
         figure_id=raw.get("figure_id", raw.get("FigureId", "")),
         base_code=base_code,
         control_code=control_code,
         control_parameter=control_parameter,
+        starts_new_figure=starts_new_figure,
         fit_type=raw.get("fit_type", raw.get("FitType", "PlaneLeastSquares")),
         fit_residual=raw.get("fit_residual", raw.get("FitResidual", 0.0)),
         source_cloud_id=raw.get("source_cloud_id", raw.get("SourceCloudId", "")),
@@ -780,7 +814,15 @@ def _point_number_from_parameter(parameter: str) -> Optional[int]:
     return int(text) if text.isdigit() else None
 
 
-def _sample_circle_points(center_n: float, center_e: float, radius: float, z: float, count: int = 49) -> List[Point3]:
+def _sample_count_for_delta(horizontal_distance: float, vertical_delta: float, tolerance: float = LINEWORK_SAMPLE_TOLERANCE_SOURCE_UNITS) -> int:
+    if tolerance <= 0.0:
+        return 2
+    intervals = max(1, int(math.ceil(max(abs(horizontal_distance), abs(vertical_delta)) / tolerance)))
+    return intervals + 1
+
+
+def _sample_circle_points(center_n: float, center_e: float, radius: float, z: float, tolerance: float = LINEWORK_SAMPLE_TOLERANCE_SOURCE_UNITS) -> List[Point3]:
+    count = _sample_count_for_delta(2.0 * math.pi * radius, 0.0, tolerance)
     points: List[Point3] = []
     for index in range(count):
         angle = 2.0 * math.pi * index / (count - 1)
@@ -826,11 +868,12 @@ def _sample_arc_points(
     start: ShotRecord,
     end: ShotRecord,
     direction: int,
-    count: int = 49,
+    tolerance: float = LINEWORK_SAMPLE_TOLERANCE_SOURCE_UNITS,
 ) -> List[Point3]:
     start_angle = math.atan2(start.northing - center_n, start.easting - center_e)
     end_angle = math.atan2(end.northing - center_n, end.easting - center_e)
     delta = _normalize_angle_delta(end_angle - start_angle, direction)
+    count = _sample_count_for_delta(abs(delta) * radius, end.elevation - start.elevation, tolerance)
     points: List[Point3] = []
     for index in range(count):
         alpha = index / (count - 1)
@@ -882,36 +925,63 @@ def _tangent_arc_points(previous: ShotRecord, pc: ShotRecord, pt: ShotRecord) ->
     return _sample_arc_points(center_e, center_n, radius, pc, pt, direction)
 
 
-def _catmull_rom_points(shots: Sequence[ShotRecord], samples_per_span: int = 8) -> List[Point3]:
+def _catmull_rom_interpolate(source: Sequence[Point3], index: int, t: float) -> Point3:
+    p0 = source[max(0, index - 1)]
+    p1 = source[index]
+    p2 = source[index + 1]
+    p3 = source[min(len(source) - 1, index + 2)]
+    t2 = t * t
+    t3 = t2 * t
+    return tuple(
+        0.5
+        * (
+            (2.0 * p1[axis])
+            + (-p0[axis] + p2[axis]) * t
+            + (2.0 * p0[axis] - 5.0 * p1[axis] + 4.0 * p2[axis] - p3[axis]) * t2
+            + (-p0[axis] + 3.0 * p1[axis] - 3.0 * p2[axis] + p3[axis]) * t3
+        )
+        for axis in range(3)
+    )  # type: ignore[return-value]
+
+
+def _point_delta_exceeds_tolerance(a: Point3, b: Point3, tolerance: float) -> bool:
+    horizontal = math.hypot(b[0] - a[0], b[1] - a[1])
+    vertical = abs(b[2] - a[2])
+    return horizontal > tolerance or vertical > tolerance
+
+
+def _append_adaptive_catmull_rom_span(
+    points: List[Point3],
+    source: Sequence[Point3],
+    span_index: int,
+    t0: float,
+    p0: Point3,
+    t1: float,
+    p1: Point3,
+    tolerance: float,
+    depth: int = 0,
+) -> None:
+    if depth < 24 and _point_delta_exceeds_tolerance(p0, p1, tolerance):
+        midpoint_t = (t0 + t1) * 0.5
+        midpoint = _catmull_rom_interpolate(source, span_index, midpoint_t)
+        _append_adaptive_catmull_rom_span(points, source, span_index, t0, p0, midpoint_t, midpoint, tolerance, depth + 1)
+        _append_adaptive_catmull_rom_span(points, source, span_index, midpoint_t, midpoint, t1, p1, tolerance, depth + 1)
+        return
+    points.append(p1)
+
+
+def _catmull_rom_points(shots: Sequence[ShotRecord], tolerance: float = LINEWORK_SAMPLE_TOLERANCE_SOURCE_UNITS) -> List[Point3]:
     if len(shots) < 2:
         return []
     if len(shots) == 2:
         return [_shot_point(shots[0]), _shot_point(shots[1])]
     points: List[Point3] = []
     source = [_shot_point(shot) for shot in shots]
+    points.append(source[0])
     for index in range(len(source) - 1):
-        p0 = source[max(0, index - 1)]
-        p1 = source[index]
-        p2 = source[index + 1]
-        p3 = source[min(len(source) - 1, index + 2)]
-        for sample in range(samples_per_span):
-            if index > 0 and sample == 0:
-                continue
-            t = sample / samples_per_span
-            t2 = t * t
-            t3 = t2 * t
-            point = tuple(
-                0.5
-                * (
-                    (2.0 * p1[axis])
-                    + (-p0[axis] + p2[axis]) * t
-                    + (2.0 * p0[axis] - 5.0 * p1[axis] + 4.0 * p2[axis] - p3[axis]) * t2
-                    + (-p0[axis] + 3.0 * p1[axis] - 3.0 * p2[axis] + p3[axis]) * t3
-                )
-                for axis in range(3)
-            )
-            points.append(point)  # type: ignore[arg-type]
-    points.append(source[-1])
+        start = _catmull_rom_interpolate(source, index, 0.0)
+        end = _catmull_rom_interpolate(source, index, 1.0)
+        _append_adaptive_catmull_rom_span(points, source, index, 0.0, start, 1.0, end, tolerance)
     return points
 
 
@@ -935,6 +1005,58 @@ def _rectangle_points(corner: ShotRecord, length_shot: Optional[ShotRecord], wid
         (corner.northing + offset_n, corner.easting + offset_e, width_shot.elevation),
         _shot_point(corner),
     ]
+
+
+def _line_intersection_2d(
+    p1: Tuple[float, float],
+    d1: Tuple[float, float],
+    p2: Tuple[float, float],
+    d2: Tuple[float, float],
+) -> Optional[Tuple[float, float]]:
+    cross = d1[0] * d2[1] - d1[1] * d2[0]
+    if abs(cross) <= 1.0e-9:
+        return None
+    delta = (p2[0] - p1[0], p2[1] - p1[1])
+    t = (delta[0] * d2[1] - delta[1] * d2[0]) / cross
+    return (p1[0] + d1[0] * t, p1[1] + d1[1] * t)
+
+
+def _offset_run_points(run: Sequence[ShotRecord], control: str, distance: float) -> List[Point3]:
+    if len(run) < 2:
+        return []
+    if control == "OV":
+        return [(shot.northing, shot.easting, shot.elevation + distance) for shot in run]
+
+    segments = []
+    for previous, shot in zip(run, run[1:]):
+        dn = shot.northing - previous.northing
+        de = shot.easting - previous.easting
+        length = math.hypot(dn, de)
+        if length <= 1.0e-9:
+            return []
+        offset_n = -de / length * distance
+        offset_e = dn / length * distance
+        segments.append(
+            {
+                "start": (previous.northing + offset_n, previous.easting + offset_e),
+                "end": (shot.northing + offset_n, shot.easting + offset_e),
+                "direction": (dn, de),
+            }
+        )
+
+    points: List[Point3] = [(segments[0]["start"][0], segments[0]["start"][1], run[0].elevation)]
+    for index in range(1, len(run) - 1):
+        incoming = segments[index - 1]
+        outgoing = segments[index]
+        intersection = _line_intersection_2d(incoming["start"], incoming["direction"], outgoing["start"], outgoing["direction"])
+        if intersection is None:
+            intersection = (
+                (incoming["end"][0] + outgoing["start"][0]) * 0.5,
+                (incoming["end"][1] + outgoing["start"][1]) * 0.5,
+            )
+        points.append((intersection[0], intersection[1], run[index].elevation))
+    points.append((segments[-1]["end"][0], segments[-1]["end"][1], run[-1].elevation))
+    return points
 
 
 def build_figure_segments(project: CSTopoProject) -> List[FigureSegmentRecord]:
@@ -1028,9 +1150,39 @@ def build_figure_segments(project: CSTopoProject) -> List[FigureSegmentRecord]:
         for a_number, b_number in zip(sequence, sequence[1:]):
             if (figure.code.upper(), a_number, b_number) in suppressed_line_pairs:
                 continue
-            add_segment("Line", figure.code, [a_number, b_number], [_shot_point(shots_by_number[a_number]), _shot_point(shots_by_number[b_number])])
+            a_shot = shots_by_number[a_number]
+            b_shot = shots_by_number[b_number]
+            if a_shot.control_code.upper() in {"OH", "OV"} or b_shot.control_code.upper() in {"OH", "OV"}:
+                continue
+            add_segment("Line", figure.code, [a_number, b_number], [_shot_point(a_shot), _shot_point(b_shot)])
         if figure.loop_closed and len(sequence) >= 2:
             add_segment("Line", figure.code, [sequence[-1], sequence[0]], [_shot_point(shots_by_number[sequence[-1]]), _shot_point(shots_by_number[sequence[0]])], "CLS", "", sequence[-1])
+
+    for base_code, base_shots in shots_by_base.items():
+        index = 0
+        while index < len(base_shots):
+            shot = base_shots[index]
+            control = shot.control_code.upper()
+            if control not in {"OH", "OV"}:
+                index += 1
+                continue
+            parameter = shot.control_parameter
+            run = [shot]
+            index += 1
+            while index < len(base_shots):
+                candidate = base_shots[index]
+                if candidate.control_code.upper() != control or candidate.control_parameter != parameter:
+                    break
+                run.append(candidate)
+                index += 1
+            if len(run) < 2:
+                continue
+            try:
+                distance = float(parameter)
+            except ValueError:
+                continue
+            points = _offset_run_points(run, control, distance)
+            add_segment("OffsetLine", base_code, [candidate.point_number for candidate in run], points, control, parameter, run[-1].point_number)
 
     for shot in project.shots:
         base_code = (shot.base_code or shot.code).upper()
@@ -1042,29 +1194,6 @@ def build_figure_segments(project: CSTopoProject) -> List[FigureSegmentRecord]:
             target = shots_by_number.get(_point_number_from_parameter(shot.control_parameter) or -1)
             if target is not None:
                 add_segment("JoinLine", base_code, [target.point_number, shot.point_number], [_shot_point(target), _shot_point(shot)], control, shot.control_parameter, shot.point_number)
-        elif control in {"OH", "OV"} and previous is not None:
-            try:
-                distance = float(shot.control_parameter)
-            except ValueError:
-                continue
-            if control == "OH":
-                dn = shot.northing - previous.northing
-                de = shot.easting - previous.easting
-                length = math.hypot(dn, de)
-                if length <= 1.0e-9:
-                    continue
-                offset_n = -de / length * distance
-                offset_e = dn / length * distance
-                points = [
-                    (previous.northing + offset_n, previous.easting + offset_e, previous.elevation),
-                    (shot.northing + offset_n, shot.easting + offset_e, shot.elevation),
-                ]
-            else:
-                points = [
-                    (previous.northing, previous.easting, previous.elevation + distance),
-                    (shot.northing, shot.easting, shot.elevation + distance),
-                ]
-            add_segment("OffsetLine", base_code, [previous.point_number, shot.point_number], points, control, shot.control_parameter, shot.point_number)
         elif control == "SCE" and index >= 2:
             circle = _circle_from_three_points(base_shots[index - 2], base_shots[index - 1], shot)
             if circle is not None:
@@ -1085,7 +1214,7 @@ def build_figure_segments(project: CSTopoProject) -> List[FigureSegmentRecord]:
 
 def project_from_dict(raw: dict) -> CSTopoProject:
     project = CSTopoProject(
-        schema_version="1.4",
+        schema_version="1.5",
         project_name=raw.get("project_name", raw.get("projectName", "Untitled CSTopo Project")),
         active_code=raw.get("active_code", raw.get("activeCode", "")),
         active_point_cloud_id=raw.get("active_point_cloud_id", raw.get("activePointCloudId", "")),
@@ -1100,6 +1229,9 @@ def project_from_dict(raw: dict) -> CSTopoProject:
         shots=[shot_from_dict(item) for item in raw.get("shots", [])],
         figures=[],
         figure_segments=[figure_segment_from_dict(item) for item in raw.get("figure_segments", raw.get("figureSegments", []))],
+        pending_control_code=raw.get("pending_control_code", raw.get("pendingControlCode", "")),
+        pending_control_parameter=raw.get("pending_control_parameter", raw.get("pendingControlParameter", "")),
+        pending_control_starts_new_figure=raw.get("pending_control_starts_new_figure", raw.get("pendingControlStartsNewFigure", False)),
     )
     for item in raw.get("figures", []):
         style_raw = item.get("style") or {"code": item["code"], "layer_name": item.get("layer_name", item["code"])}
@@ -3064,8 +3196,7 @@ def export_dxf(project: CSTopoProject, path: Path) -> None:
         layer = project.style_for(shot.base_code or shot.code).layer_name
         lines.extend(["0", "POINT", "8", layer, "10", f"{shot.easting:.4f}", "20", f"{shot.northing:.4f}", "30", f"{shot.elevation:.4f}"])
 
-    if not project.figure_segments:
-        project.rebuild_figure_segments()
+    project.rebuild_figure_segments()
 
     for segment in project.figure_segments:
         if len(segment.survey_points) < 2:

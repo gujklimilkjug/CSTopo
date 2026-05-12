@@ -1286,13 +1286,14 @@ FReply SCSTopoSurveyHud::HandleCancelControlCode()
     CodeFilterText.Empty();
     if (UCSTopoSurveySubsystem* Survey = SurveySubsystem.Get())
     {
-        Survey->ClearPendingControlCode();
+        FString StatusMessage;
+        Survey->CancelPendingControlCode(StatusMessage);
+        ActionStatusMessage = StatusMessage;
     }
     if (CodeSearchBox.IsValid())
     {
         CodeSearchBox->SetText(FText::GetEmpty());
     }
-    ActionStatusMessage = TEXT("Control code selection canceled.");
     RefreshDynamicContent();
     return FReply::Handled();
 }
