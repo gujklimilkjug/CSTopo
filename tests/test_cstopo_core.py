@@ -4,6 +4,7 @@ import math
 import struct
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from scripts.cstopo_core import (
@@ -35,7 +36,16 @@ from scripts.cstopo_core import (
     _decimate_tin_points,
     _edge_lengths_xy,
     _extract_tin_boundary_edges,
+    _filter_tin_triangles_numpy,
+    _filter_tin_triangles_python,
     _point_key,
+    _read_las_xyz_points_numpy,
+    _read_las_xyz_points_python,
+    _read_cstin_binary_tile,
+    _write_cstin_binary_tile,
+    _write_global_tin_surface_tiles,
+    _write_global_tin_binary_surface_tiles,
+    write_surface_build_progress,
 )
 
 
@@ -558,6 +568,32 @@ class CSTopoCoreTests(unittest.TestCase):
             self.assertEqual(progress["stage"], "Ready")
             self.assertEqual(progress["progress"], 1.0)
             self.assertIn("Surface ready", progress["message"])
+            self.assertIn("build_timings_seconds", progress)
+            self.assertIn("las_read", progress["build_timings_seconds"])
+            self.assertIn("tile_writing", progress["build_timings_seconds"])
+            surface_manifest = json.loads(Path(project.derived_surfaces[0].manifest_path).read_text(encoding="utf-8"))
+            self.assertIn("build_timings_seconds", surface_manifest)
+            self.assertEqual(surface_manifest["schema_version"], "5.1")
+            self.assertTrue(all(tile["mesh_format"] == "CSTopoBinaryTIN1" for tile in surface_manifest["tiles"]))
+            self.assertTrue(all(tile["mesh_path"].endswith(".cstin") for tile in surface_manifest["tiles"]))
+
+    def test_surface_progress_write_is_best_effort_when_replace_is_locked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            progress_path = Path(temp) / "surface_progress.json"
+            original_replace = Path.replace
+
+            def flaky_replace(self, target):
+                if self.name.startswith("surface_progress.json."):
+                    raise PermissionError(5, "Access is denied")
+                return original_replace(self, target)
+
+            with mock.patch.object(Path, "replace", flaky_replace):
+                write_surface_build_progress(progress_path, 0.5, "Testing", "Progress writes should not fail.", 1, 2)
+
+            progress = json.loads(progress_path.read_text(encoding="utf-8"))
+            self.assertEqual(progress["stage"], "Testing")
+            self.assertEqual(progress["current"], 1)
+            self.assertFalse(any(path.name.endswith(".tmp") for path in progress_path.parent.iterdir()))
 
     def test_surface_tile_does_not_bridge_unsupported_voids(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -858,6 +894,177 @@ class CSTopoCoreTests(unittest.TestCase):
             triangle_keys.extend(tuple(sorted(_point_key(point) for point in triangle)) for triangle in triangles)
         self.assertEqual(len(triangle_keys), len(set(triangle_keys)))
         self.assertEqual(diagnostics.retained_triangle_count, len(triangle_keys))
+
+    def test_numpy_tin_filter_matches_python_filter(self):
+        raw_triangles = [
+            ((0.0, 0.0, 10.0), (1.0, 0.0, 10.1), (0.0, 1.0, 10.2)),
+            ((20.0, 20.0, 10.0), (21.0, 20.0, 10.0), (20.0, 21.0, 10.0)),
+            ((0.0, 0.0, 10.0), (10.0, 0.0, 10.0), (0.0, 10.0, 10.0)),
+            ((2.0, 2.0, 10.0), (3.0, 2.0, 20.0), (2.0, 3.0, 10.0)),
+        ]
+
+        try:
+            numpy_retained, numpy_diagnostics = _filter_tin_triangles_numpy(
+                raw_triangles,
+                0.0,
+                0.0,
+                10.0,
+                10.0,
+                5.0,
+                1,
+                1,
+                5.0,
+                0.75,
+                5.0,
+            )
+        except RuntimeError as exc:
+            self.skipTest(str(exc))
+        python_retained, python_diagnostics = _filter_tin_triangles_python(
+            raw_triangles,
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            5.0,
+            1,
+            1,
+            5.0,
+            0.75,
+            5.0,
+        )
+
+        self.assertEqual(numpy_retained, python_retained)
+        self.assertEqual(numpy_diagnostics.retained_triangle_count, python_diagnostics.retained_triangle_count)
+        self.assertEqual(numpy_diagnostics.rejected_bounds_count, python_diagnostics.rejected_bounds_count)
+        self.assertEqual(numpy_diagnostics.rejected_large_triangle_count, python_diagnostics.rejected_large_triangle_count)
+        self.assertEqual(numpy_diagnostics.rejected_z_delta_count, python_diagnostics.rejected_z_delta_count)
+
+    def test_numpy_las_reader_matches_python_reader(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "surface_source.las"
+            write_surface_test_las(source)
+            header = read_las_header(source)
+            try:
+                numpy_points = _read_las_xyz_points_numpy(source, header)
+            except RuntimeError as exc:
+                self.skipTest(str(exc))
+
+            self.assertEqual(numpy_points, _read_las_xyz_points_python(source, header))
+
+    def test_parallel_global_tin_tile_writes_are_deterministic(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            points = [
+                (float(x), float(y), 10.0 + x * 0.05 + y * 0.02)
+                for x in range(0, 21, 2)
+                for y in range(0, 11, 2)
+            ]
+            triangles_by_owner, boundary_edges_by_owner, _diagnostics, status, message = _build_global_tin_tile_data(
+                points,
+                0.0,
+                0.0,
+                20.0,
+                10.0,
+                10.0,
+                1,
+                0,
+                configured_edge_length=8.0,
+                edge_multiplier=8.0,
+                area_multiplier=0.75,
+                max_triangle_z_delta=None,
+            )
+            self.assertEqual(status, "Passed", message)
+            sorted_owner_tiles = sorted(triangles_by_owner.items())
+
+            summaries = []
+            for workers in (0, 1, 2):
+                timings = {}
+                tiles = _write_global_tin_surface_tiles(
+                    "SOURCEID",
+                    root / f"workers_{workers}",
+                    sorted_owner_tiles,
+                    boundary_edges_by_owner,
+                    workers,
+                    None,
+                    timings,
+                )
+                summaries.append([(tile.tile_id, tile.vertex_count, tile.triangle_count, tile.bounds_min, tile.bounds_max) for tile in tiles])
+                self.assertGreater(len(tiles), 1)
+
+            self.assertEqual(summaries[0], summaries[1])
+            self.assertEqual(summaries[1], summaries[2])
+
+    def test_binary_tin_tile_round_trips_arrays(self):
+        try:
+            import numpy as np
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "tile.cstin"
+            vertices = np.asarray(
+                [
+                    (0.0, 0.0, 10.0),
+                    (1.0, 0.0, 11.0),
+                    (0.0, 1.0, 12.0),
+                    (1.0, 1.0, 13.0),
+                ],
+                dtype=np.float64,
+            )
+            triangles = np.asarray([(0, 1, 2), (1, 3, 2)], dtype=np.uint32)
+
+            _write_cstin_binary_tile(path, vertices, triangles)
+            read_vertices, read_triangles, bounds_min, bounds_max = _read_cstin_binary_tile(path)
+
+            self.assertTrue(np.array_equal(read_vertices, vertices))
+            self.assertTrue(np.array_equal(read_triangles, triangles))
+            self.assertEqual(bounds_min, (0.0, 0.0, 10.0))
+            self.assertEqual(bounds_max, (1.0, 1.0, 13.0))
+
+    def test_parallel_binary_global_tin_tile_writes_are_deterministic(self):
+        try:
+            import numpy as np
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            global_vertices = np.asarray(
+                [
+                    (0.0, 0.0, 10.0),
+                    (1.0, 0.0, 10.1),
+                    (0.0, 1.0, 10.2),
+                    (1.0, 1.0, 10.3),
+                    (2.0, 0.0, 10.4),
+                    (2.0, 1.0, 10.5),
+                ],
+                dtype=np.float64,
+            )
+            sorted_owner_tiles = [
+                ((0, 0), np.asarray([(0, 1, 2), (1, 3, 2)], dtype=np.uint32)),
+                ((1, 0), np.asarray([(1, 4, 3), (4, 5, 3)], dtype=np.uint32)),
+            ]
+            summaries = []
+            for workers in (0, 1, 2):
+                tiles = _write_global_tin_binary_surface_tiles(
+                    "SOURCEID",
+                    root / f"workers_{workers}",
+                    global_vertices,
+                    sorted_owner_tiles,
+                    {0: 4, 1: 4},
+                    0,
+                    workers,
+                    None,
+                    {},
+                )
+                summaries.append([(tile.tile_id, tile.mesh_format, tile.vertex_count, tile.triangle_count, tile.bounds_min, tile.bounds_max) for tile in tiles])
+                for tile in tiles:
+                    self.assertTrue(Path(tile.mesh_path).exists())
+                    self.assertTrue(tile.mesh_path.endswith(".cstin"))
+                    self.assertEqual(tile.mesh_format, "CSTopoBinaryTIN1")
+
+            self.assertEqual(summaries[0], summaries[1])
+            self.assertEqual(summaries[1], summaries[2])
 
     def test_global_tin_partition_boundary_is_not_square_clipped(self):
         points = [

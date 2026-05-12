@@ -307,7 +307,7 @@ private:
     bool QueryDerivedSurfaceHeightAtSourceXY(const FCSTopoPointCloudSource& Source, double SourceX, double SourceY, double& SurfaceZ, FString* OutTileId = nullptr) const;
     bool QueryNearestDerivedSurfaceHeightAtSourceXY(const FCSTopoPointCloudSource& Source, double SourceX, double SourceY, double SearchRadiusSourceUnits, double& SurfaceZ, FString* OutTileId = nullptr) const;
     bool TraceTriangleFromView(const FVector& ViewOrigin, const FVector& ViewDirection, const FVector& A, const FVector& B, const FVector& C, double& OutDistance, FVector& OutHit) const;
-    bool LoadTileGeometry(const FString& MeshPath, FCSTopoLoadedSurfaceTile& Tile, FString& ErrorMessage) const;
+    bool LoadTileGeometry(const FString& MeshPath, const FString& MeshFormat, FCSTopoLoadedSurfaceTile& Tile, FString& ErrorMessage) const;
     void RefreshSurfacePresentation(FCSTopoPointCloudSource& Source);
     void UpdateVisibleSurfaceTiles(FCSTopoPointCloudSource& Source, const FVector& SourceLocation, bool bForce);
     void RebuildSurfaceCollisionProxy(const FCSTopoPointCloudSource& Source, FCSTopoLoadedSurface& Surface, const FVector& SourceLocation, bool bForce);

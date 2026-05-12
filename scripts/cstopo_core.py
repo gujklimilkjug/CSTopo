@@ -7,23 +7,30 @@ import os
 import shutil
 import struct
 import subprocess
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 
 Point3 = Tuple[float, float, float]
 INTERNAL_CONTROL_CODES = {"PT"}
 DEFAULT_QGIS_PDAL = Path(r"C:\Program Files\QGIS 3.40.12\bin\pdal.exe")
-SURFACE_MANIFEST_SCHEMA_VERSION = "5.0"
+SURFACE_MANIFEST_SCHEMA_VERSION = "5.1"
 SURFACE_BUILD_METHOD_TIN = "BufferedDelaunayTIN"
 SURFACE_BUILD_METHOD_GLOBAL_TIN = "GlobalDelaunayTIN"
 SOURCE_POINT_PRECISION = 0.01
 LINEWORK_SAMPLE_TOLERANCE_SOURCE_UNITS = 0.1
 TIN_BOUNDARY_MODE_SUPPORT = "SupportBoundary"
 SURFACE_COLLISION_MODE_STITCHED_TIN = "RuntimeVisibleStitchedTIN"
+SURFACE_TILE_FORMAT_JSON = "JsonTIN"
+SURFACE_TILE_FORMAT_BINARY = "CSTopoBinaryTIN1"
+CSTIN_BINARY_MAGIC = b"CSTTIN1\0"
+CSTIN_BINARY_VERSION = 1
 BUILT_IN_CODE_LIST_PATH = Path(__file__).resolve().parents[1] / "Config" / "CSTopoCodeList.json"
 BUILT_IN_CONTROL_CODE_LIST_PATH = Path(__file__).resolve().parents[1] / "Config" / "CSTopoControlCodeList.json"
 
@@ -290,6 +297,7 @@ class SurfaceTileRecord:
     vertex_count: int = 0
     triangle_count: int = 0
     mesh_path: str = ""
+    mesh_format: str = SURFACE_TILE_FORMAT_JSON
     status: str = "Pending"
     input_point_count: int = 0
     used_point_count: int = 0
@@ -336,6 +344,7 @@ class DerivedSurfaceManifest:
     surface_collision_mode: str = SURFACE_COLLISION_MODE_STITCHED_TIN
     seam_audit_status: str = "NotRun"
     seam_audit_message: str = ""
+    build_timings_seconds: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -676,6 +685,7 @@ def derived_surface_from_dict(raw: dict) -> DerivedSurfaceManifest:
                 vertex_count=item.get("vertex_count", 0),
                 triangle_count=item.get("triangle_count", 0),
                 mesh_path=item.get("mesh_path", ""),
+                mesh_format=item.get("mesh_format", SURFACE_TILE_FORMAT_JSON),
                 status=item.get("status", "Pending"),
                 input_point_count=item.get("input_point_count", 0),
                 used_point_count=item.get("used_point_count", 0),
@@ -705,6 +715,7 @@ def derived_surface_from_dict(raw: dict) -> DerivedSurfaceManifest:
         surface_collision_mode=raw.get("surface_collision_mode", SURFACE_COLLISION_MODE_STITCHED_TIN),
         seam_audit_status=raw.get("seam_audit_status", "NotRun"),
         seam_audit_message=raw.get("seam_audit_message", ""),
+        build_timings_seconds=dict(raw.get("build_timings_seconds", {})),
     )
 
 
@@ -1616,6 +1627,7 @@ def write_surface_build_progress(
     message: str,
     current: int = 0,
     total: int = 0,
+    build_timings_seconds: Optional[Dict[str, float]] = None,
 ) -> None:
     if progress_path is None:
         return
@@ -1630,9 +1642,64 @@ def write_surface_build_progress(
         "total": total,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    temp_path = progress_path.with_suffix(progress_path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    temp_path.replace(progress_path)
+    if build_timings_seconds:
+        payload["build_timings_seconds"] = dict(sorted(build_timings_seconds.items()))
+    serialized = json.dumps(payload, indent=2)
+    temp_path = progress_path.with_name(f"{progress_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        temp_path.write_text(serialized, encoding="utf-8")
+        for attempt in range(8):
+            try:
+                temp_path.replace(progress_path)
+                return
+            except OSError:
+                if attempt == 7:
+                    break
+                time.sleep(0.025 * (attempt + 1))
+        try:
+            progress_path.write_text(serialized, encoding="utf-8")
+        except OSError:
+            pass
+    except OSError:
+        pass
+    finally:
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except OSError:
+            pass
+
+
+@contextmanager
+def _surface_build_timer(timings: Dict[str, float], stage: str) -> Iterator[None]:
+    started_at = time.perf_counter()
+    try:
+        yield
+    finally:
+        timings[stage] = timings.get(stage, 0.0) + (time.perf_counter() - started_at)
+
+
+def _format_elapsed(seconds: float) -> str:
+    if seconds < 60.0:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    return f"{minutes}m {seconds - (minutes * 60):.0f}s"
+
+
+def _timed_progress_message(message: str, timings: Dict[str, float], stage: str) -> str:
+    elapsed = timings.get(stage)
+    if elapsed is None:
+        return message
+    return f"{message} ({_format_elapsed(elapsed)})"
+
+
+@contextmanager
+def _optional_surface_build_timer(timings: Optional[Dict[str, float]], stage: str) -> Iterator[None]:
+    if timings is None:
+        yield
+    else:
+        with _surface_build_timer(timings, stage):
+            yield
 
 
 def _classification_support(stats: dict) -> Tuple[bool, bool]:
@@ -1667,8 +1734,8 @@ def _build_ground_pipeline(source: PointCloudSource, output_path: Path, classifi
     return pipeline, ground_source
 
 
-def _read_las_xyz_points(source_path: Path) -> List[Point3]:
-    header = read_las_header(source_path)
+def _read_las_xyz_points_python(source_path: Path, header: Optional[LasHeaderInfo] = None) -> List[Point3]:
+    header = header or read_las_header(source_path)
     if header.point_record_length < 12:
         raise ValueError(f"{source_path} does not contain readable XYZ point records.")
 
@@ -1685,6 +1752,46 @@ def _read_las_xyz_points(source_path: Path) -> List[Point3]:
             z = iz * header.scale[2] + header.offset[2]
             points.append((x, y, z))
     return points
+
+
+def _read_las_xyz_points_numpy(source_path: Path, header: LasHeaderInfo) -> List[Point3]:
+    if header.point_record_length < 12:
+        raise ValueError(f"{source_path} does not contain readable XYZ point records.")
+    if header.point_count <= 0:
+        return []
+
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("numpy is not available for fast LAS XYZ reads.") from exc
+
+    record_bytes = header.point_record_length
+    expected_bytes = header.point_count * record_bytes
+    with source_path.open("rb") as handle:
+        handle.seek(header.point_data_offset)
+        data = handle.read(expected_bytes)
+
+    if len(data) < 12:
+        return []
+    complete_record_count = len(data) // record_bytes
+    if complete_record_count <= 0:
+        return []
+
+    records = np.frombuffer(data[: complete_record_count * record_bytes], dtype=np.uint8).reshape(complete_record_count, record_bytes)
+    xyz_ints = records[:, :12].copy().view("<i4").reshape(complete_record_count, 3)
+    xyz = xyz_ints.astype(float)
+    xyz[:, 0] = (xyz[:, 0] * header.scale[0]) + header.offset[0]
+    xyz[:, 1] = (xyz[:, 1] * header.scale[1]) + header.offset[1]
+    xyz[:, 2] = (xyz[:, 2] * header.scale[2]) + header.offset[2]
+    return [tuple(row) for row in xyz.tolist()]
+
+
+def _read_las_xyz_points(source_path: Path) -> List[Point3]:
+    header = read_las_header(source_path)
+    try:
+        return _read_las_xyz_points_numpy(source_path, header)
+    except Exception:
+        return _read_las_xyz_points_python(source_path, header)
 
 
 def _fill_height_grid(
@@ -2170,7 +2277,45 @@ def _triangulate_tin_points(points: Sequence[Point3], boundary_edges: Optional[S
     return triangles, "Constrained" if boundary_edges else "RawDelaunay"
 
 
-def _filter_tin_triangles(
+def _points_to_numpy_xyz(points: Sequence[Point3]):
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("numpy is required for fast GlobalDelaunayTIN surface builds.") from exc
+    return np.asarray(points, dtype=np.float64)
+
+
+def _triangulate_tin_point_arrays(points: Sequence[Point3]):
+    try:
+        import numpy as np
+        import triangle as triangle_lib
+    except ImportError as exc:
+        raise RuntimeError("The triangle and numpy Python packages are required for GlobalDelaunayTIN surface builds.") from exc
+
+    vertices_xyz = _points_to_numpy_xyz(points)
+    triangulated = triangle_lib.triangulate({"vertices": vertices_xyz[:, :2]}, "Q")
+    raw_triangles = triangulated.get("triangles")
+    result_vertices = triangulated.get("vertices")
+    if raw_triangles is None or result_vertices is None:
+        return vertices_xyz, np.empty((0, 3), dtype=np.uint32), "NoTriangles"
+
+    result_vertices = np.asarray(result_vertices, dtype=np.float64)
+    if result_vertices.shape[0] == vertices_xyz.shape[0] and np.allclose(result_vertices, vertices_xyz[:, :2]):
+        result_xyz = vertices_xyz
+    else:
+        z_by_xy = {_xy_key(point[0], point[1]): point[2] for point in points}
+        z_values = []
+        for x, y in result_vertices:
+            z = z_by_xy.get(_xy_key(float(x), float(y)))
+            if z is None:
+                return vertices_xyz, np.empty((0, 3), dtype=np.uint32), "NoTriangles"
+            z_values.append(z)
+        result_xyz = np.column_stack((result_vertices[:, 0], result_vertices[:, 1], np.asarray(z_values, dtype=np.float64)))
+
+    return result_xyz, np.asarray(raw_triangles, dtype=np.uint32), "RawDelaunay"
+
+
+def _filter_tin_triangles_python(
     raw_triangles: Sequence[Tuple[Point3, Point3, Point3]],
     source_min_x: float,
     source_min_y: float,
@@ -2217,6 +2362,226 @@ def _filter_tin_triangles(
     diagnostics.boundary_edge_count = len(boundary_edges)
     diagnostics.boundary_loop_count = _count_tin_boundary_loops(boundary_edges)
     return retained, diagnostics
+
+
+def _filter_tin_triangles_numpy(
+    raw_triangles: Sequence[Tuple[Point3, Point3, Point3]],
+    source_min_x: float,
+    source_min_y: float,
+    source_max_x: float,
+    source_max_y: float,
+    tile_size: float,
+    max_tile_x: int,
+    max_tile_y: int,
+    max_edge_length: float,
+    area_multiplier: float,
+    max_triangle_z_delta: Optional[float],
+) -> Tuple[List[Tuple[Point3, Point3, Point3]], TinBoundaryDiagnostics]:
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError("numpy is not available for fast TIN filtering.") from exc
+
+    diagnostics = TinBoundaryDiagnostics(
+        input_triangle_count=len(raw_triangles),
+        resolved_max_edge_length=max_edge_length,
+        resolved_max_area=(max_edge_length * max_edge_length * max(area_multiplier, 0.0)) if max_edge_length > 0.0 else 0.0,
+    )
+    if not raw_triangles:
+        return [], diagnostics
+
+    triangles = np.asarray(raw_triangles, dtype=float)
+    if triangles.ndim != 3 or triangles.shape[1:] != (3, 3):
+        raise ValueError("TIN triangle array has an unexpected shape.")
+
+    x = triangles[:, :, 0]
+    y = triangles[:, :, 1]
+    z = triangles[:, :, 2]
+    area = np.abs(
+        (x[:, 2] * y[:, 0] - x[:, 0] * y[:, 2])
+        + (x[:, 0] * y[:, 1] - x[:, 1] * y[:, 0])
+        + (x[:, 1] * y[:, 2] - x[:, 2] * y[:, 1])
+    ) * 0.5
+
+    reason = np.zeros(len(raw_triangles), dtype=np.uint8)
+    large_reason = np.uint8(1)
+    bounds_reason = np.uint8(2)
+    z_delta_reason = np.uint8(3)
+
+    reason[area <= 1.0e-8] = large_reason
+
+    unresolved = reason == 0
+    centroid_x = x.mean(axis=1)
+    centroid_y = y.mean(axis=1)
+    bounds_mask = (
+        (centroid_x < source_min_x)
+        | (centroid_x > source_max_x)
+        | (centroid_y < source_min_y)
+        | (centroid_y > source_max_y)
+    )
+    reason[unresolved & bounds_mask] = bounds_reason
+
+    unresolved = reason == 0
+    dx01 = x[:, 0] - x[:, 1]
+    dy01 = y[:, 0] - y[:, 1]
+    dx12 = x[:, 1] - x[:, 2]
+    dy12 = y[:, 1] - y[:, 2]
+    dx20 = x[:, 2] - x[:, 0]
+    dy20 = y[:, 2] - y[:, 0]
+    edge01 = np.hypot(dx01, dy01)
+    edge12 = np.hypot(dx12, dy12)
+    edge20 = np.hypot(dx20, dy20)
+    max_edges = np.maximum(np.maximum(edge01, edge12), edge20)
+    large_mask = np.zeros(len(raw_triangles), dtype=bool)
+    if max_edge_length > 0.0:
+        large_mask |= max_edges > max_edge_length
+    if diagnostics.resolved_max_area > 0.0:
+        large_mask |= area > diagnostics.resolved_max_area
+    if max_edge_length > 0.0:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            circumradius = (edge01 * edge12 * edge20) / (4.0 * area)
+        large_mask |= circumradius > max_edge_length
+    reason[unresolved & large_mask] = large_reason
+
+    if max_triangle_z_delta is not None:
+        unresolved = reason == 0
+        z_delta = z.max(axis=1) - z.min(axis=1)
+        reason[unresolved & (z_delta > max_triangle_z_delta)] = z_delta_reason
+
+    retained_indices = np.flatnonzero(reason == 0)
+    retained = [raw_triangles[int(index)] for index in retained_indices]
+    diagnostics.rejected_large_triangle_count = int(np.count_nonzero(reason == large_reason))
+    diagnostics.rejected_bounds_count = int(np.count_nonzero(reason == bounds_reason))
+    diagnostics.rejected_z_delta_count = int(np.count_nonzero(reason == z_delta_reason))
+    diagnostics.retained_triangle_count = len(retained)
+    boundary_edges = _extract_tin_boundary_edges(retained)
+    diagnostics.boundary_edge_count = len(boundary_edges)
+    diagnostics.boundary_loop_count = _count_tin_boundary_loops(boundary_edges)
+    return retained, diagnostics
+
+
+def _filter_tin_triangles(
+    raw_triangles: Sequence[Tuple[Point3, Point3, Point3]],
+    source_min_x: float,
+    source_min_y: float,
+    source_max_x: float,
+    source_max_y: float,
+    tile_size: float,
+    max_tile_x: int,
+    max_tile_y: int,
+    max_edge_length: float,
+    area_multiplier: float,
+    max_triangle_z_delta: Optional[float],
+) -> Tuple[List[Tuple[Point3, Point3, Point3]], TinBoundaryDiagnostics]:
+    try:
+        return _filter_tin_triangles_numpy(
+            raw_triangles,
+            source_min_x,
+            source_min_y,
+            source_max_x,
+            source_max_y,
+            tile_size,
+            max_tile_x,
+            max_tile_y,
+            max_edge_length,
+            area_multiplier,
+            max_triangle_z_delta,
+        )
+    except Exception:
+        return _filter_tin_triangles_python(
+            raw_triangles,
+            source_min_x,
+            source_min_y,
+            source_max_x,
+            source_max_y,
+            tile_size,
+            max_tile_x,
+            max_tile_y,
+            max_edge_length,
+            area_multiplier,
+            max_triangle_z_delta,
+        )
+
+
+def _filter_tin_triangle_indices_numpy(
+    vertices_xyz,
+    triangle_indices,
+    source_min_x: float,
+    source_min_y: float,
+    source_max_x: float,
+    source_max_y: float,
+    tile_size: float,
+    max_tile_x: int,
+    max_tile_y: int,
+    max_edge_length: float,
+    area_multiplier: float,
+    max_triangle_z_delta: Optional[float],
+):
+    import numpy as np
+
+    diagnostics = TinBoundaryDiagnostics(
+        input_triangle_count=int(len(triangle_indices)),
+        resolved_max_edge_length=max_edge_length,
+        resolved_max_area=(max_edge_length * max_edge_length * max(area_multiplier, 0.0)) if max_edge_length > 0.0 else 0.0,
+    )
+    if len(triangle_indices) == 0:
+        return triangle_indices, diagnostics
+
+    coords = vertices_xyz[triangle_indices]
+    x = coords[:, :, 0]
+    y = coords[:, :, 1]
+    z = coords[:, :, 2]
+    area = np.abs(
+        (x[:, 2] * y[:, 0] - x[:, 0] * y[:, 2])
+        + (x[:, 0] * y[:, 1] - x[:, 1] * y[:, 0])
+        + (x[:, 1] * y[:, 2] - x[:, 2] * y[:, 1])
+    ) * 0.5
+
+    reason = np.zeros(len(triangle_indices), dtype=np.uint8)
+    large_reason = np.uint8(1)
+    bounds_reason = np.uint8(2)
+    z_delta_reason = np.uint8(3)
+
+    reason[area <= 1.0e-8] = large_reason
+
+    unresolved = reason == 0
+    centroid_x = x.mean(axis=1)
+    centroid_y = y.mean(axis=1)
+    reason[
+        unresolved
+        & (
+            (centroid_x < source_min_x)
+            | (centroid_x > source_max_x)
+            | (centroid_y < source_min_y)
+            | (centroid_y > source_max_y)
+        )
+    ] = bounds_reason
+
+    unresolved = reason == 0
+    edge01 = np.hypot(x[:, 0] - x[:, 1], y[:, 0] - y[:, 1])
+    edge12 = np.hypot(x[:, 1] - x[:, 2], y[:, 1] - y[:, 2])
+    edge20 = np.hypot(x[:, 2] - x[:, 0], y[:, 2] - y[:, 0])
+    large_mask = np.zeros(len(triangle_indices), dtype=bool)
+    if max_edge_length > 0.0:
+        large_mask |= np.maximum(np.maximum(edge01, edge12), edge20) > max_edge_length
+    if diagnostics.resolved_max_area > 0.0:
+        large_mask |= area > diagnostics.resolved_max_area
+    if max_edge_length > 0.0:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            circumradius = (edge01 * edge12 * edge20) / (4.0 * area)
+        large_mask |= circumradius > max_edge_length
+    reason[unresolved & large_mask] = large_reason
+
+    if max_triangle_z_delta is not None:
+        unresolved = reason == 0
+        reason[unresolved & ((z.max(axis=1) - z.min(axis=1)) > max_triangle_z_delta)] = z_delta_reason
+
+    retained = triangle_indices[reason == 0]
+    diagnostics.retained_triangle_count = int(len(retained))
+    diagnostics.rejected_large_triangle_count = int(np.count_nonzero(reason == large_reason))
+    diagnostics.rejected_bounds_count = int(np.count_nonzero(reason == bounds_reason))
+    diagnostics.rejected_z_delta_count = int(np.count_nonzero(reason == z_delta_reason))
+    return retained.astype(np.uint32, copy=False), diagnostics
 
 
 def _build_supported_tin_triangles(
@@ -2601,6 +2966,7 @@ def _build_tin_surface_tile(
         vertex_count=len(output_vertices),
         triangle_count=len(output_triangles) // 3,
         mesh_path=str(output_path),
+        mesh_format=SURFACE_TILE_FORMAT_JSON,
         status="Ready",
         input_point_count=input_point_count,
         used_point_count=len(used_points),
@@ -2824,6 +3190,91 @@ def _write_global_tin_surface_tile(
     )
 
 
+def _write_cstin_binary_tile(output_path: Path, vertices_xyz, triangle_indices) -> None:
+    import numpy as np
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    vertices = np.asarray(vertices_xyz, dtype="<f8")
+    indices = np.asarray(triangle_indices, dtype="<u4").reshape(-1)
+    bounds_min = vertices.min(axis=0)
+    bounds_max = vertices.max(axis=0)
+    header = struct.pack(
+        "<8sIII6d",
+        CSTIN_BINARY_MAGIC,
+        CSTIN_BINARY_VERSION,
+        int(vertices.shape[0]),
+        int(indices.shape[0]),
+        float(bounds_min[0]),
+        float(bounds_min[1]),
+        float(bounds_min[2]),
+        float(bounds_max[0]),
+        float(bounds_max[1]),
+        float(bounds_max[2]),
+    )
+    with output_path.open("wb") as handle:
+        handle.write(header)
+        handle.write(vertices.tobytes(order="C"))
+        handle.write(indices.tobytes(order="C"))
+
+
+def _read_cstin_binary_tile(path: Path):
+    import numpy as np
+
+    header_size = struct.calcsize("<8sIII6d")
+    data = path.read_bytes()
+    if len(data) < header_size:
+        raise ValueError(f"{path} is too small to be a CSTopo binary TIN tile.")
+    magic, version, vertex_count, index_count, *bounds = struct.unpack("<8sIII6d", data[:header_size])
+    if magic != CSTIN_BINARY_MAGIC or version != CSTIN_BINARY_VERSION:
+        raise ValueError(f"{path} is not a supported CSTopo binary TIN tile.")
+    vertex_bytes = vertex_count * 3 * 8
+    index_bytes = index_count * 4
+    expected_size = header_size + vertex_bytes + index_bytes
+    if len(data) != expected_size:
+        raise ValueError(f"{path} has an unexpected binary TIN tile size.")
+    vertices = np.frombuffer(data, dtype="<f8", count=vertex_count * 3, offset=header_size).reshape(vertex_count, 3).copy()
+    indices = np.frombuffer(data, dtype="<u4", count=index_count, offset=header_size + vertex_bytes).copy()
+    return vertices, indices.reshape(-1, 3), tuple(bounds[:3]), tuple(bounds[3:])
+
+
+def _write_global_tin_binary_surface_tile(
+    tile_id: str,
+    global_vertices_xyz,
+    global_triangle_indices,
+    output_path: Path,
+    boundary_edge_count: int,
+    boundary_loop_count: int,
+) -> Optional[SurfaceTileRecord]:
+    import numpy as np
+
+    if global_triangle_indices.size < 3:
+        return None
+    local_vertex_indices, inverse = np.unique(global_triangle_indices.reshape(-1), return_inverse=True)
+    local_vertices = global_vertices_xyz[local_vertex_indices]
+    local_triangles = inverse.astype(np.uint32, copy=False).reshape(-1, 3)
+    if local_vertices.shape[0] < 3 or local_triangles.size < 3:
+        return None
+
+    _write_cstin_binary_tile(output_path, local_vertices, local_triangles)
+    bounds_min = tuple(float(item) for item in local_vertices.min(axis=0))
+    bounds_max = tuple(float(item) for item in local_vertices.max(axis=0))
+    return SurfaceTileRecord(
+        tile_id=tile_id,
+        bounds_min=bounds_min,
+        bounds_max=bounds_max,
+        vertex_count=int(local_vertices.shape[0]),
+        triangle_count=int(local_triangles.shape[0]),
+        mesh_path=str(output_path),
+        mesh_format=SURFACE_TILE_FORMAT_BINARY,
+        status="Ready",
+        input_point_count=int(local_vertices.shape[0]),
+        used_point_count=int(local_vertices.shape[0]),
+        decimation_method="none",
+        boundary_edge_count=boundary_edge_count,
+        boundary_loop_count=boundary_loop_count,
+    )
+
+
 def _build_global_tin_tile_data(
     points: Sequence[Point3],
     source_min_x: float,
@@ -2837,6 +3288,8 @@ def _build_global_tin_tile_data(
     edge_multiplier: float,
     area_multiplier: float,
     max_triangle_z_delta: Optional[float],
+    points_are_unique: bool = False,
+    build_timings_seconds: Optional[Dict[str, float]] = None,
 ) -> Tuple[
     Dict[Tuple[int, int], List[Tuple[Point3, Point3, Point3]]],
     Dict[Tuple[int, int], List[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]],
@@ -2844,79 +3297,82 @@ def _build_global_tin_tile_data(
     str,
     str,
 ]:
-    unique_points = _dedupe_xy_points(points)
+    unique_points = list(points) if points_are_unique else _dedupe_xy_points(points)
     max_edge_length = _resolve_tin_max_edge_length(unique_points, configured_edge_length, edge_multiplier)
-    raw_triangles, triangulation_status = _triangulate_tin_points(unique_points)
-    retained_triangles, diagnostics = _filter_tin_triangles(
-        raw_triangles,
-        source_min_x,
-        source_min_y,
-        source_max_x,
-        source_max_y,
-        tile_size,
-        max_tile_x,
-        max_tile_y,
-        max_edge_length,
-        area_multiplier,
-        max_triangle_z_delta,
-    )
+    with _optional_surface_build_timer(build_timings_seconds, "tin_triangulation"):
+        raw_triangles, triangulation_status = _triangulate_tin_points(unique_points)
+    with _optional_surface_build_timer(build_timings_seconds, "tin_filtering"):
+        retained_triangles, diagnostics = _filter_tin_triangles(
+            raw_triangles,
+            source_min_x,
+            source_min_y,
+            source_max_x,
+            source_max_y,
+            tile_size,
+            max_tile_x,
+            max_tile_y,
+            max_edge_length,
+            area_multiplier,
+            max_triangle_z_delta,
+        )
     diagnostics.constrained_triangulation_status = triangulation_status
 
-    triangles_by_owner: Dict[Tuple[int, int], List[Tuple[Point3, Point3, Point3]]] = {}
-    edge_to_owners: Dict[Tuple[Tuple[int, int, int], Tuple[int, int, int]], Set[Tuple[int, int]]] = {}
-    edge_use_count: Dict[Tuple[Tuple[int, int, int], Tuple[int, int, int]], int] = {}
-    seen_triangle_keys: Set[Tuple[Tuple[int, int, int], Tuple[int, int, int], Tuple[int, int, int]]] = set()
-    duplicate_triangle_count = 0
-    ownerless_triangle_count = 0
+    with _optional_surface_build_timer(build_timings_seconds, "tin_ownership_audit"):
+        triangles_by_owner: Dict[Tuple[int, int], List[Tuple[Point3, Point3, Point3]]] = {}
+        edge_to_owners: Dict[Tuple[Tuple[int, int, int], Tuple[int, int, int]], Set[Tuple[int, int]]] = {}
+        edge_use_count: Dict[Tuple[Tuple[int, int, int], Tuple[int, int, int]], int] = {}
+        seen_triangle_keys: Set[Tuple[Tuple[int, int, int], Tuple[int, int, int], Tuple[int, int, int]]] = set()
+        duplicate_triangle_count = 0
+        ownerless_triangle_count = 0
 
-    for triangle_points in retained_triangles:
-        triangle_key = _triangle_key(triangle_points)
-        if triangle_key in seen_triangle_keys:
-            duplicate_triangle_count += 1
-            continue
-        seen_triangle_keys.add(triangle_key)
-        owner = _tin_triangle_owner(triangle_points, source_min_x, source_min_y, source_max_x, source_max_y, tile_size, max_tile_x, max_tile_y)
-        if owner is None:
-            ownerless_triangle_count += 1
-            continue
-        triangles_by_owner.setdefault(owner, []).append(triangle_points)
-        for index, point in enumerate(triangle_points):
-            edge = _edge_key_for_points(point, triangle_points[(index + 1) % 3])
-            edge_to_owners.setdefault(edge, set()).add(owner)
-            edge_use_count[edge] = edge_use_count.get(edge, 0) + 1
+        for triangle_points in retained_triangles:
+            triangle_key = _triangle_key(triangle_points)
+            if triangle_key in seen_triangle_keys:
+                duplicate_triangle_count += 1
+                continue
+            seen_triangle_keys.add(triangle_key)
+            owner = _tin_triangle_owner(triangle_points, source_min_x, source_min_y, source_max_x, source_max_y, tile_size, max_tile_x, max_tile_y)
+            if owner is None:
+                ownerless_triangle_count += 1
+                continue
+            triangles_by_owner.setdefault(owner, []).append(triangle_points)
+            for index, point in enumerate(triangle_points):
+                edge = _edge_key_for_points(point, triangle_points[(index + 1) % 3])
+                edge_to_owners.setdefault(edge, set()).add(owner)
+                edge_use_count[edge] = edge_use_count.get(edge, 0) + 1
 
-    boundary_edges_by_owner: Dict[Tuple[int, int], List[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]] = {}
-    nonmanifold_edge_count = 0
-    for edge, use_count in edge_use_count.items():
-        owners = edge_to_owners.get(edge, set())
-        if use_count > 2:
-            nonmanifold_edge_count += 1
-        if use_count == 1 or len(owners) > 1:
-            for owner in owners:
-                boundary_edges_by_owner.setdefault(owner, []).append(edge)
+        boundary_edges_by_owner: Dict[Tuple[int, int], List[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]] = {}
+        nonmanifold_edge_count = 0
+        for edge, use_count in edge_use_count.items():
+            owners = edge_to_owners.get(edge, set())
+            if use_count > 2:
+                nonmanifold_edge_count += 1
+            if use_count == 1 or len(owners) > 1:
+                for owner in owners:
+                    boundary_edges_by_owner.setdefault(owner, []).append(edge)
 
-    for owner in triangles_by_owner:
-        boundary_edges_by_owner.setdefault(owner, [])
+        for owner in triangles_by_owner:
+            boundary_edges_by_owner.setdefault(owner, [])
 
-    diagnostics.retained_triangle_count = sum(len(items) for items in triangles_by_owner.values())
-    diagnostics.boundary_edge_count = sum(len(items) for items in boundary_edges_by_owner.values())
-    diagnostics.boundary_loop_count = sum(len(_boundary_loops_from_edges(items)) for items in boundary_edges_by_owner.values())
+        diagnostics.retained_triangle_count = sum(len(items) for items in triangles_by_owner.values())
+        diagnostics.boundary_edge_count = sum(len(items) for items in boundary_edges_by_owner.values())
+        diagnostics.boundary_loop_count = sum(len(_boundary_loops_from_edges(items)) for items in boundary_edges_by_owner.values())
 
-    audit_errors: List[str] = []
-    if duplicate_triangle_count:
-        audit_errors.append(f"duplicate owned triangles={duplicate_triangle_count}")
-    if ownerless_triangle_count:
-        audit_errors.append(f"ownerless triangles={ownerless_triangle_count}")
-    if nonmanifold_edge_count:
-        audit_errors.append(f"non-manifold edges={nonmanifold_edge_count}")
-    missing_reciprocal_edges = 0
-    for edge, owners in edge_to_owners.items():
-        if len(owners) > 1:
-            for owner in owners:
-                if edge not in boundary_edges_by_owner.get(owner, []):
-                    missing_reciprocal_edges += 1
-    if missing_reciprocal_edges:
-        audit_errors.append(f"non-reciprocal shared boundary edges={missing_reciprocal_edges}")
+        audit_errors: List[str] = []
+        if duplicate_triangle_count:
+            audit_errors.append(f"duplicate owned triangles={duplicate_triangle_count}")
+        if ownerless_triangle_count:
+            audit_errors.append(f"ownerless triangles={ownerless_triangle_count}")
+        if nonmanifold_edge_count:
+            audit_errors.append(f"non-manifold edges={nonmanifold_edge_count}")
+        missing_reciprocal_edges = 0
+        for edge, owners in edge_to_owners.items():
+            if len(owners) > 1:
+                for owner in owners:
+                    if edge not in boundary_edges_by_owner.get(owner, []):
+                        missing_reciprocal_edges += 1
+        if missing_reciprocal_edges:
+            audit_errors.append(f"non-reciprocal shared boundary edges={missing_reciprocal_edges}")
 
     if audit_errors:
         return triangles_by_owner, boundary_edges_by_owner, diagnostics, "Failed", "; ".join(audit_errors)
@@ -2930,23 +3386,363 @@ def _build_global_tin_tile_data(
     )
 
 
+def _build_global_tin_array_tile_data(
+    points: Sequence[Point3],
+    source_min_x: float,
+    source_min_y: float,
+    source_max_x: float,
+    source_max_y: float,
+    tile_size: float,
+    max_tile_x: int,
+    max_tile_y: int,
+    configured_edge_length: float,
+    edge_multiplier: float,
+    area_multiplier: float,
+    max_triangle_z_delta: Optional[float],
+    points_are_unique: bool = False,
+    build_timings_seconds: Optional[Dict[str, float]] = None,
+):
+    import numpy as np
+
+    unique_points = list(points) if points_are_unique else _dedupe_xy_points(points)
+    max_edge_length = _resolve_tin_max_edge_length(unique_points, configured_edge_length, edge_multiplier)
+    with _optional_surface_build_timer(build_timings_seconds, "tin_triangulation"):
+        vertices_xyz, raw_triangles, triangulation_status = _triangulate_tin_point_arrays(unique_points)
+    with _optional_surface_build_timer(build_timings_seconds, "tin_filtering"):
+        retained_triangles, diagnostics = _filter_tin_triangle_indices_numpy(
+            vertices_xyz,
+            raw_triangles,
+            source_min_x,
+            source_min_y,
+            source_max_x,
+            source_max_y,
+            tile_size,
+            max_tile_x,
+            max_tile_y,
+            max_edge_length,
+            area_multiplier,
+            max_triangle_z_delta,
+        )
+    diagnostics.constrained_triangulation_status = triangulation_status
+
+    with _optional_surface_build_timer(build_timings_seconds, "tin_ownership_audit"):
+        if len(retained_triangles) == 0:
+            return vertices_xyz, {}, {}, diagnostics, "Passed", "Global TIN produced no retained triangles."
+
+        tri_vertices = vertices_xyz[retained_triangles]
+        centroid_x = tri_vertices[:, :, 0].mean(axis=1)
+        centroid_y = tri_vertices[:, :, 1].mean(axis=1)
+        ownerless_mask = (
+            (centroid_x < source_min_x)
+            | (centroid_x > source_max_x)
+            | (centroid_y < source_min_y)
+            | (centroid_y > source_max_y)
+        )
+        tile_x = np.clip(np.floor((centroid_x - source_min_x) / tile_size).astype(np.int64), 0, max_tile_x)
+        tile_y = np.clip(np.floor((centroid_y - source_min_y) / tile_size).astype(np.int64), 0, max_tile_y)
+        owner_ids = (tile_x * (max_tile_y + 1)) + tile_y
+
+        sorted_triangle_keys = np.sort(retained_triangles, axis=1)
+        unique_triangle_keys, first_indices, triangle_key_counts = np.unique(
+            sorted_triangle_keys,
+            axis=0,
+            return_index=True,
+            return_counts=True,
+        )
+        duplicate_triangle_count = int(np.count_nonzero(triangle_key_counts > 1))
+        keep_indices = np.sort(first_indices[~ownerless_mask[first_indices]])
+        retained_triangles = retained_triangles[keep_indices]
+        owner_ids = owner_ids[keep_indices]
+        tile_x = tile_x[keep_indices]
+        tile_y = tile_y[keep_indices]
+
+        tile_triangles_by_owner: Dict[Tuple[int, int], object] = {}
+        unique_owner_ids = np.unique(owner_ids)
+        for owner_id in unique_owner_ids:
+            owner_mask = owner_ids == owner_id
+            first = int(np.flatnonzero(owner_mask)[0])
+            owner = (int(tile_x[first]), int(tile_y[first]))
+            tile_triangles_by_owner[owner] = retained_triangles[owner_mask]
+
+        edge_a = retained_triangles[:, (0, 1, 2)].reshape(-1)
+        edge_b = retained_triangles[:, (1, 2, 0)].reshape(-1)
+        edges = np.stack((np.minimum(edge_a, edge_b), np.maximum(edge_a, edge_b)), axis=1)
+        edge_owner_ids = np.repeat(owner_ids, 3)
+        unique_edges, edge_inverse, edge_counts = np.unique(edges, axis=0, return_inverse=True, return_counts=True)
+        nonmanifold_edge_count = int(np.count_nonzero(edge_counts > 2))
+
+        order = np.lexsort((edge_owner_ids, edge_inverse))
+        sorted_edge_inverse = edge_inverse[order]
+        sorted_edge_owner_ids = edge_owner_ids[order]
+        unique_edge_owner_pairs = np.ones(len(order), dtype=bool)
+        unique_edge_owner_pairs[1:] = (
+            (sorted_edge_inverse[1:] != sorted_edge_inverse[:-1])
+            | (sorted_edge_owner_ids[1:] != sorted_edge_owner_ids[:-1])
+        )
+        owner_count_by_edge = np.bincount(
+            sorted_edge_inverse[unique_edge_owner_pairs],
+            minlength=len(unique_edges),
+        )
+        boundary_edge_mask = (edge_counts[edge_inverse] == 1) | (owner_count_by_edge[edge_inverse] > 1)
+        boundary_owner_ids, boundary_counts = np.unique(edge_owner_ids[boundary_edge_mask], return_counts=True)
+        boundary_counts_by_owner_id = {
+            int(owner_id): int(count)
+            for owner_id, count in zip(boundary_owner_ids, boundary_counts)
+        }
+        boundary_loop_counts_by_owner_id: Dict[int, int] = {}
+
+        diagnostics.retained_triangle_count = int(len(retained_triangles))
+        diagnostics.boundary_edge_count = int(sum(boundary_counts_by_owner_id.values()))
+        diagnostics.boundary_loop_count = 0
+
+        audit_errors: List[str] = []
+        ownerless_triangle_count = int(np.count_nonzero(ownerless_mask))
+        if duplicate_triangle_count:
+            audit_errors.append(f"duplicate owned triangles={duplicate_triangle_count}")
+        if ownerless_triangle_count:
+            audit_errors.append(f"ownerless triangles={ownerless_triangle_count}")
+        if nonmanifold_edge_count:
+            audit_errors.append(f"non-manifold edges={nonmanifold_edge_count}")
+
+    if audit_errors:
+        return vertices_xyz, tile_triangles_by_owner, boundary_counts_by_owner_id, diagnostics, "Failed", "; ".join(audit_errors)
+
+    return (
+        vertices_xyz,
+        tile_triangles_by_owner,
+        boundary_counts_by_owner_id,
+        diagnostics,
+        "Passed",
+        "Global TIN topology audit passed: every retained triangle is owned once and no non-manifold edges were found.",
+    )
+
+
+def _resolve_surface_build_worker_count(requested_workers: int, tile_count: int) -> int:
+    if tile_count <= 1:
+        return 1
+    if requested_workers > 0:
+        return min(requested_workers, tile_count)
+    cpu_count = os.cpu_count() or 1
+    return max(1, min(cpu_count, 8, tile_count))
+
+
+def _write_global_tin_owner_tile(
+    source_id_prefix: str,
+    surface_dir: Path,
+    owner_tile: Tuple[int, int],
+    candidate_triangles: Sequence[Tuple[Point3, Point3, Point3]],
+    boundary_edges: Sequence[Tuple[Tuple[int, int, int], Tuple[int, int, int]]],
+) -> Tuple[Tuple[int, int], Optional[SurfaceTileRecord]]:
+    tile_x, tile_y = owner_tile
+    tile_id = f"{source_id_prefix}_{tile_x}_{tile_y}"
+    tile_path = surface_dir / "tiles" / f"{tile_id}.json"
+    return owner_tile, _write_global_tin_surface_tile(
+        tile_id,
+        candidate_triangles,
+        boundary_edges,
+        tile_path,
+    )
+
+
+def _write_global_tin_binary_owner_tile(
+    source_id_prefix: str,
+    surface_dir: Path,
+    owner_tile: Tuple[int, int],
+    global_vertices_xyz,
+    global_triangle_indices,
+    boundary_edge_count: int,
+    boundary_loop_count: int = 0,
+) -> Tuple[Tuple[int, int], Optional[SurfaceTileRecord]]:
+    tile_x, tile_y = owner_tile
+    tile_id = f"{source_id_prefix}_{tile_x}_{tile_y}"
+    tile_path = surface_dir / "tiles" / f"{tile_id}.cstin"
+    return owner_tile, _write_global_tin_binary_surface_tile(
+        tile_id,
+        global_vertices_xyz,
+        global_triangle_indices,
+        tile_path,
+        boundary_edge_count,
+        boundary_loop_count,
+    )
+
+
+def _write_global_tin_binary_surface_tiles(
+    source_id_prefix: str,
+    surface_dir: Path,
+    global_vertices_xyz,
+    sorted_owner_tiles: Sequence[Tuple[Tuple[int, int], object]],
+    boundary_counts_by_owner_id: Dict[int, int],
+    max_tile_y: int,
+    requested_workers: int,
+    progress_path: Optional[Path],
+    timings: Dict[str, float],
+) -> List[SurfaceTileRecord]:
+    total_owner_tiles = max(len(sorted_owner_tiles), 1)
+    worker_count = _resolve_surface_build_worker_count(requested_workers, len(sorted_owner_tiles))
+    write_surface_build_progress(
+        progress_path,
+        0.72,
+        "Writing Tiles",
+        f"Writing {len(sorted_owner_tiles)} binary surface tile(s) with {worker_count} worker(s).",
+        0,
+        total_owner_tiles,
+        timings,
+    )
+    tile_results: Dict[Tuple[int, int], SurfaceTileRecord] = {}
+    completed_count = 0
+
+    def boundary_count(owner_tile: Tuple[int, int]) -> int:
+        return boundary_counts_by_owner_id.get((owner_tile[0] * (max_tile_y + 1)) + owner_tile[1], 0)
+
+    def record_result(owner: Tuple[int, int], tile: Optional[SurfaceTileRecord]) -> None:
+        nonlocal completed_count
+        completed_count += 1
+        if tile is not None:
+            tile_results[owner] = tile
+        write_surface_build_progress(
+            progress_path,
+            0.72 + (0.20 * completed_count / total_owner_tiles),
+            "Writing Tiles",
+            f"Writing binary surface tile {completed_count} of {total_owner_tiles} with {worker_count} worker(s).",
+            completed_count,
+            total_owner_tiles,
+            timings,
+        )
+
+    if worker_count <= 1:
+        for owner_tile, candidate_triangles in sorted_owner_tiles:
+            owner, tile = _write_global_tin_binary_owner_tile(
+                source_id_prefix,
+                surface_dir,
+                owner_tile,
+                global_vertices_xyz,
+                candidate_triangles,
+                boundary_count(owner_tile),
+            )
+            record_result(owner, tile)
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [
+                executor.submit(
+                    _write_global_tin_binary_owner_tile,
+                    source_id_prefix,
+                    surface_dir,
+                    owner_tile,
+                    global_vertices_xyz,
+                    candidate_triangles,
+                    boundary_count(owner_tile),
+                )
+                for owner_tile, candidate_triangles in sorted_owner_tiles
+            ]
+            for future in as_completed(futures):
+                owner, tile = future.result()
+                record_result(owner, tile)
+
+    return [tile_results[owner] for owner, _candidate_triangles in sorted_owner_tiles if owner in tile_results]
+
+
+def _write_global_tin_surface_tiles(
+    source_id_prefix: str,
+    surface_dir: Path,
+    sorted_owner_tiles: Sequence[Tuple[Tuple[int, int], Sequence[Tuple[Point3, Point3, Point3]]]],
+    boundary_edges_by_owner: Dict[Tuple[int, int], List[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]],
+    requested_workers: int,
+    progress_path: Optional[Path],
+    timings: Dict[str, float],
+) -> List[SurfaceTileRecord]:
+    total_owner_tiles = max(len(sorted_owner_tiles), 1)
+    worker_count = _resolve_surface_build_worker_count(requested_workers, len(sorted_owner_tiles))
+    write_surface_build_progress(
+        progress_path,
+        0.72,
+        "Writing Tiles",
+        f"Writing {len(sorted_owner_tiles)} surface tile(s) with {worker_count} worker(s).",
+        0,
+        total_owner_tiles,
+        timings,
+    )
+    tile_results: Dict[Tuple[int, int], SurfaceTileRecord] = {}
+    completed_count = 0
+
+    def record_result(owner: Tuple[int, int], tile: Optional[SurfaceTileRecord]) -> None:
+        nonlocal completed_count
+        completed_count += 1
+        if tile is not None:
+            tile_results[owner] = tile
+        write_surface_build_progress(
+            progress_path,
+            0.72 + (0.20 * completed_count / total_owner_tiles),
+            "Writing Tiles",
+            f"Writing surface tile {completed_count} of {total_owner_tiles} with {worker_count} worker(s).",
+            completed_count,
+            total_owner_tiles,
+            timings,
+        )
+
+    if worker_count <= 1:
+        for owner_tile, candidate_triangles in sorted_owner_tiles:
+            owner, tile = _write_global_tin_owner_tile(
+                source_id_prefix,
+                surface_dir,
+                owner_tile,
+                candidate_triangles,
+                boundary_edges_by_owner.get(owner_tile, []),
+            )
+            record_result(owner, tile)
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [
+                executor.submit(
+                    _write_global_tin_owner_tile,
+                    source_id_prefix,
+                    surface_dir,
+                    owner_tile,
+                    candidate_triangles,
+                    boundary_edges_by_owner.get(owner_tile, []),
+                )
+                for owner_tile, candidate_triangles in sorted_owner_tiles
+            ]
+            for future in as_completed(futures):
+                owner, tile = future.result()
+                record_result(owner, tile)
+
+    return [tile_results[owner] for owner, _candidate_triangles in sorted_owner_tiles if owner in tile_results]
+
+
+def _write_surface_manifest_with_timings(
+    manifest: DerivedSurfaceManifest,
+    manifest_path: Path,
+    timings: Dict[str, float],
+    build_started_at: float,
+) -> None:
+    manifest.build_timings_seconds = dict(sorted(timings.items()))
+    with _surface_build_timer(timings, "manifest_save"):
+        manifest_path.write_text(json.dumps(asdict(manifest), indent=2), encoding="utf-8")
+    timings["total"] = time.perf_counter() - build_started_at
+    manifest.build_timings_seconds = dict(sorted(timings.items()))
+    manifest_path.write_text(json.dumps(asdict(manifest), indent=2), encoding="utf-8")
+
+
 def build_surface_cache(
     project: CSTopoProject,
     source_id: str,
     cache_dir: Path,
     force_rebuild: bool = False,
     progress_path: Optional[Path] = None,
+    surface_build_workers: int = 0,
 ) -> DerivedSurfaceManifest:
+    build_started_at = time.perf_counter()
+    build_timings_seconds: Dict[str, float] = {}
     source = next((item for item in project.point_clouds if item.source_id == source_id), None)
     if source is None:
         raise ValueError(f"Point cloud {source_id} was not found.")
 
-    write_surface_build_progress(progress_path, 0.02, "Preparing", "Preparing surface build.")
+    write_surface_build_progress(progress_path, 0.02, "Preparing", "Preparing surface build.", build_timings_seconds=build_timings_seconds)
     manifest_path = build_default_surface_manifest_path(cache_dir, source.source_id)
     if manifest_path.exists() and not force_rebuild:
         manifest = derived_surface_from_dict(json.loads(manifest_path.read_text(encoding="utf-8")))
         if manifest.schema_version == SURFACE_MANIFEST_SCHEMA_VERSION:
-            write_surface_build_progress(progress_path, 1.0, "Ready", "Existing surface manifest is current.", 1, 1)
+            write_surface_build_progress(progress_path, 1.0, "Ready", "Existing surface manifest is current.", 1, 1, build_timings_seconds)
             return manifest
 
     surface_dir = manifest_path.parent
@@ -2956,17 +3752,25 @@ def build_surface_cache(
         shutil.rmtree(tiles_dir)
     ground_path = surface_dir / "ground.las"
     pipeline_path = surface_dir / "ground_pipeline.json"
-    write_surface_build_progress(progress_path, 0.08, "Classifying Ground", "Classifying ground points with PDAL.")
-    pipeline, ground_source = _build_ground_pipeline(source, ground_path, project.surface_settings.ground_classification_method)
-    pipeline_path.write_text(json.dumps(pipeline, indent=2), encoding="utf-8")
-    try:
-        subprocess.run([find_pdal_executable(), "pipeline", str(pipeline_path)], check=True)
-    finally:
-        if pipeline_path.exists():
-            pipeline_path.unlink()
+    write_surface_build_progress(progress_path, 0.08, "Classifying Ground", "Classifying ground points with PDAL.", build_timings_seconds=build_timings_seconds)
+    with _surface_build_timer(build_timings_seconds, "pdal_ground_classification"):
+        pipeline, ground_source = _build_ground_pipeline(source, ground_path, project.surface_settings.ground_classification_method)
+        pipeline_path.write_text(json.dumps(pipeline, indent=2), encoding="utf-8")
+        try:
+            subprocess.run([find_pdal_executable(), "pipeline", str(pipeline_path)], check=True)
+        finally:
+            if pipeline_path.exists():
+                pipeline_path.unlink()
 
-    write_surface_build_progress(progress_path, 0.22, "Reading Ground", "Reading ground-classified points.")
-    ground_points = _read_las_xyz_points(ground_path)
+    write_surface_build_progress(
+        progress_path,
+        0.22,
+        "Reading Ground",
+        _timed_progress_message("Reading ground-classified points.", build_timings_seconds, "pdal_ground_classification"),
+        build_timings_seconds=build_timings_seconds,
+    )
+    with _surface_build_timer(build_timings_seconds, "las_read"):
+        ground_points = _read_las_xyz_points(ground_path)
     if not ground_points:
         raise ValueError("Ground-classified surface build returned no points.")
 
@@ -2985,14 +3789,16 @@ def build_surface_cache(
 
     max_tile_x = max(0, int(math.ceil((max_x - min_x) / tile_size)) - 1)
     max_tile_y = max(0, int(math.ceil((max_y - min_y) / tile_size)) - 1)
-    unique_ground_points = _dedupe_xy_points(ground_points)
+    with _surface_build_timer(build_timings_seconds, "dedupe"):
+        unique_ground_points = _dedupe_xy_points(ground_points)
     write_surface_build_progress(
         progress_path,
         0.32,
         "Preparing TIN",
-        f"Preparing {len(unique_ground_points)} unique ground points for TIN generation.",
+        _timed_progress_message(f"Preparing {len(unique_ground_points)} unique ground points for TIN generation.", build_timings_seconds, "dedupe"),
         len(unique_ground_points),
         len(unique_ground_points),
+        build_timings_seconds,
     )
     if len(unique_ground_points) > global_tin_max_points:
         raise ValueError(
@@ -3004,11 +3810,12 @@ def build_surface_cache(
         progress_path,
         0.38,
         "Generating TIN",
-        f"Generating global Delaunay TIN from {len(unique_ground_points)} ground points.",
+        _timed_progress_message(f"Generating global Delaunay TIN from {len(unique_ground_points)} ground points.", build_timings_seconds, "las_read"),
         0,
         len(unique_ground_points),
+        build_timings_seconds,
     )
-    candidate_triangles_by_owner, boundary_edges_by_owner, aggregate_diagnostics, topology_audit_status, topology_audit_message = _build_global_tin_tile_data(
+    global_vertices_xyz, candidate_triangles_by_owner, boundary_counts_by_owner_id, aggregate_diagnostics, topology_audit_status, topology_audit_message = _build_global_tin_array_tile_data(
         unique_ground_points,
         min_x,
         min_y,
@@ -3021,46 +3828,34 @@ def build_surface_cache(
         edge_multiplier=boundary_edge_multiplier,
         area_multiplier=boundary_area_multiplier,
         max_triangle_z_delta=max_triangle_z_delta,
+        points_are_unique=True,
+        build_timings_seconds=build_timings_seconds,
     )
 
-    tiles: List[SurfaceTileRecord] = []
-    exported_triangles: List[Tuple[Point3, Point3, Point3]] = []
     sorted_owner_tiles = sorted(candidate_triangles_by_owner.items())
-    total_owner_tiles = max(len(sorted_owner_tiles), 1)
-    write_surface_build_progress(
-        progress_path,
-        0.72,
-        "Writing Tiles",
-        f"Writing {len(sorted_owner_tiles)} surface tile(s).",
-        0,
-        total_owner_tiles,
-    )
-    for tile_index, (owner_tile, candidate_triangles) in enumerate(sorted_owner_tiles, start=1):
-        tile_x, tile_y = owner_tile
-        tile_id = f"{source.source_id[:8]}_{tile_x}_{tile_y}"
-        tile_path = surface_dir / "tiles" / f"{tile_id}.json"
-        tile = _write_global_tin_surface_tile(
-            tile_id,
-            candidate_triangles,
-            boundary_edges_by_owner.get(owner_tile, []),
-            tile_path,
-        )
-        if tile is not None:
-            tiles.append(tile)
-            exported_triangles.extend(candidate_triangles)
-        write_surface_build_progress(
+    with _surface_build_timer(build_timings_seconds, "tile_writing"):
+        tiles = _write_global_tin_binary_surface_tiles(
+            source.source_id[:8],
+            surface_dir,
+            global_vertices_xyz,
+            sorted_owner_tiles,
+            boundary_counts_by_owner_id,
+            max_tile_y,
+            surface_build_workers,
             progress_path,
-            0.72 + (0.20 * tile_index / total_owner_tiles),
-            "Writing Tiles",
-            f"Writing surface tile {tile_index} of {total_owner_tiles}.",
-            tile_index,
-            total_owner_tiles,
+            build_timings_seconds,
         )
 
     if not tiles:
         raise ValueError("Ground-classified global TIN surface build produced no valid triangles.")
 
-    write_surface_build_progress(progress_path, 0.94, "Auditing", "Auditing TIN topology and tile boundaries.")
+    write_surface_build_progress(
+        progress_path,
+        0.94,
+        "Auditing",
+        _timed_progress_message("Auditing TIN topology and tile boundaries.", build_timings_seconds, "tin_ownership_audit"),
+        build_timings_seconds=build_timings_seconds,
+    )
     seam_audit_status = topology_audit_status
     seam_audit_message = topology_audit_message
     if topology_audit_status == "Failed":
@@ -3102,10 +3897,10 @@ def build_surface_cache(
             seam_audit_status=seam_audit_status,
             seam_audit_message=seam_audit_message,
         )
-        manifest_path.write_text(json.dumps(asdict(manifest), indent=2), encoding="utf-8")
+        _write_surface_manifest_with_timings(manifest, manifest_path, build_timings_seconds, build_started_at)
         raise ValueError(topology_audit_message)
 
-    write_surface_build_progress(progress_path, 0.98, "Saving", "Saving derived surface manifest.")
+    write_surface_build_progress(progress_path, 0.98, "Saving", "Saving derived surface manifest.", build_timings_seconds=build_timings_seconds)
     manifest = DerivedSurfaceManifest(
         surface_id=source.surface_id or str(uuid.uuid4()),
         source_cloud_id=source.source_id,
@@ -3144,7 +3939,7 @@ def build_surface_cache(
         seam_audit_status=seam_audit_status,
         seam_audit_message=seam_audit_message,
     )
-    manifest_path.write_text(json.dumps(asdict(manifest), indent=2), encoding="utf-8")
+    _write_surface_manifest_with_timings(manifest, manifest_path, build_timings_seconds, build_started_at)
 
     source.surface_id = manifest.surface_id
     source.surface_manifest_path = str(manifest_path)
@@ -3158,7 +3953,7 @@ def build_surface_cache(
 
     project.derived_surfaces = [item for item in project.derived_surfaces if item.source_cloud_id != source.source_id]
     project.derived_surfaces.append(manifest)
-    write_surface_build_progress(progress_path, 1.0, "Ready", source.surface_status, len(tiles), len(tiles))
+    write_surface_build_progress(progress_path, 1.0, "Ready", source.surface_status, len(tiles), len(tiles), build_timings_seconds)
     return manifest
 
 

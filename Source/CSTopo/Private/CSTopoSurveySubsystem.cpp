@@ -30,7 +30,15 @@ namespace
 constexpr ECollisionChannel CSTopoSurfaceCollisionChannel = ECC_GameTraceChannel1;
 constexpr double CSTopoLineworkSampleToleranceSourceUnits = 0.1;
 
-const TCHAR* CurrentSurfaceManifestSchemaVersion = TEXT("5.0");
+const TCHAR* CurrentSurfaceManifestSchemaVersion = TEXT("5.1");
+const TCHAR* LegacySurfaceManifestSchemaVersion = TEXT("5.0");
+const TCHAR* SurfaceTileFormatJson = TEXT("JsonTIN");
+const TCHAR* SurfaceTileFormatBinary = TEXT("CSTopoBinaryTIN1");
+
+bool IsSupportedSurfaceManifestSchema(const FString& SchemaVersion)
+{
+    return SchemaVersion == CurrentSurfaceManifestSchemaVersion || SchemaVersion == LegacySurfaceManifestSchemaVersion;
+}
 
 int32 ReadInt32LE(const uint8* Bytes)
 {
@@ -39,6 +47,21 @@ int32 ReadInt32LE(const uint8* Bytes)
         | (static_cast<uint32>(Bytes[1]) << 8)
         | (static_cast<uint32>(Bytes[2]) << 16)
         | (static_cast<uint32>(Bytes[3]) << 24));
+}
+
+uint32 ReadUInt32LE(const uint8* Bytes)
+{
+    return static_cast<uint32>(Bytes[0])
+        | (static_cast<uint32>(Bytes[1]) << 8)
+        | (static_cast<uint32>(Bytes[2]) << 16)
+        | (static_cast<uint32>(Bytes[3]) << 24);
+}
+
+double ReadDoubleLE(const uint8* Bytes)
+{
+    double Value = 0.0;
+    FMemory::Memcpy(&Value, Bytes, sizeof(double));
+    return Value;
 }
 
 double ClampPositive(double Value, double Fallback)
@@ -173,7 +196,7 @@ bool IsSurfaceManifestSchemaCurrent(const FString& ManifestPath)
 
     FString SchemaVersion;
     return Root->TryGetStringField(TEXT("schema_version"), SchemaVersion)
-        && SchemaVersion == CurrentSurfaceManifestSchemaVersion;
+        && IsSupportedSurfaceManifestSchema(SchemaVersion);
 }
 
 FString NormalizeCSTopoDialogPath(const FString& FilePath)
@@ -1578,8 +1601,97 @@ bool UCSTopoSurveySubsystem::CanWalkActiveSurface(FString& StatusMessage) const
     return true;
 }
 
-bool UCSTopoSurveySubsystem::LoadTileGeometry(const FString& MeshPath, FCSTopoLoadedSurfaceTile& Tile, FString& ErrorMessage) const
+bool UCSTopoSurveySubsystem::LoadTileGeometry(const FString& MeshPath, const FString& MeshFormat, FCSTopoLoadedSurfaceTile& Tile, FString& ErrorMessage) const
 {
+    const bool bBinaryTile = MeshFormat.Equals(SurfaceTileFormatBinary, ESearchCase::IgnoreCase)
+        || FPaths::GetExtension(MeshPath).Equals(TEXT("cstin"), ESearchCase::IgnoreCase);
+    if (bBinaryTile)
+    {
+        TArray<uint8> Bytes;
+        if (!FFileHelper::LoadFileToArray(Bytes, *MeshPath))
+        {
+            ErrorMessage = FString::Printf(TEXT("Failed to read binary surface tile: %s"), *MeshPath);
+            return false;
+        }
+
+        constexpr int32 HeaderSize = 8 + 4 + 4 + 4 + (6 * 8);
+        const uint8 ExpectedMagic[8] = { 'C', 'S', 'T', 'T', 'I', 'N', '1', '\0' };
+        if (Bytes.Num() < HeaderSize || FMemory::Memcmp(Bytes.GetData(), ExpectedMagic, 8) != 0)
+        {
+            ErrorMessage = FString::Printf(TEXT("Invalid binary surface tile header: %s"), *MeshPath);
+            return false;
+        }
+
+        const uint8* Cursor = Bytes.GetData() + 8;
+        const uint32 Version = ReadUInt32LE(Cursor);
+        Cursor += 4;
+        const uint32 VertexCount = ReadUInt32LE(Cursor);
+        Cursor += 4;
+        const uint32 IndexCount = ReadUInt32LE(Cursor);
+        Cursor += 4;
+        if (Version != 1 || VertexCount > static_cast<uint32>(MAX_int32) || IndexCount > static_cast<uint32>(MAX_int32))
+        {
+            ErrorMessage = FString::Printf(TEXT("Unsupported binary surface tile metadata: %s"), *MeshPath);
+            return false;
+        }
+
+        const double BoundsMinX = ReadDoubleLE(Cursor);
+        Cursor += 8;
+        const double BoundsMinY = ReadDoubleLE(Cursor);
+        Cursor += 8;
+        const double BoundsMinZ = ReadDoubleLE(Cursor);
+        Cursor += 8;
+        const double BoundsMaxX = ReadDoubleLE(Cursor);
+        Cursor += 8;
+        const double BoundsMaxY = ReadDoubleLE(Cursor);
+        Cursor += 8;
+        const double BoundsMaxZ = ReadDoubleLE(Cursor);
+        Cursor += 8;
+
+        const int64 VertexBytes = static_cast<int64>(VertexCount) * 3 * sizeof(double);
+        const int64 IndexBytes = static_cast<int64>(IndexCount) * sizeof(uint32);
+        const int64 ExpectedSize = static_cast<int64>(HeaderSize) + VertexBytes + IndexBytes;
+        if (Bytes.Num() != ExpectedSize || IndexCount % 3 != 0)
+        {
+            ErrorMessage = FString::Printf(TEXT("Binary surface tile size is invalid: %s"), *MeshPath);
+            return false;
+        }
+
+        Tile.TileId = FPaths::GetBaseFilename(MeshPath);
+        Tile.BoundsMin = FVector(BoundsMinX, BoundsMinY, BoundsMinZ);
+        Tile.BoundsMax = FVector(BoundsMaxX, BoundsMaxY, BoundsMaxZ);
+        Tile.SourceVertices.Reset(static_cast<int32>(VertexCount));
+        Tile.Triangles.Reset(static_cast<int32>(IndexCount));
+
+        const uint8* VertexCursor = Bytes.GetData() + HeaderSize;
+        for (uint32 Index = 0; Index < VertexCount; ++Index)
+        {
+            const double X = ReadDoubleLE(VertexCursor);
+            VertexCursor += 8;
+            const double Y = ReadDoubleLE(VertexCursor);
+            VertexCursor += 8;
+            const double Z = ReadDoubleLE(VertexCursor);
+            VertexCursor += 8;
+            Tile.SourceVertices.Add(FVector(X, Y, Z));
+        }
+
+        const uint8* IndexCursor = Bytes.GetData() + HeaderSize + VertexBytes;
+        for (uint32 Index = 0; Index < IndexCount; ++Index)
+        {
+            const uint32 TriangleIndex = ReadUInt32LE(IndexCursor);
+            IndexCursor += 4;
+            if (TriangleIndex >= VertexCount || TriangleIndex > static_cast<uint32>(MAX_int32))
+            {
+                ErrorMessage = FString::Printf(TEXT("Binary surface tile has an out-of-range triangle index: %s"), *MeshPath);
+                return false;
+            }
+            Tile.Triangles.Add(static_cast<int32>(TriangleIndex));
+        }
+
+        ErrorMessage.Empty();
+        return Tile.SourceVertices.Num() >= 3 && Tile.Triangles.Num() >= 3;
+    }
+
     FString Json;
     if (!FFileHelper::LoadFileToString(Json, *MeshPath))
     {
@@ -1670,7 +1782,7 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
 
     FCSTopoDerivedSurfaceManifest Manifest;
     if (!Root->TryGetStringField(TEXT("schema_version"), Manifest.SchemaVersion)
-        || Manifest.SchemaVersion != CurrentSurfaceManifestSchemaVersion)
+        || !IsSupportedSurfaceManifestSchema(Manifest.SchemaVersion))
     {
         ErrorMessage = FString::Printf(TEXT("Surface manifest is stale; rebuild required: %s"), *Source.SurfaceManifestPath);
         Source.SurfaceBuildState = ECSTopoSurfaceBuildState::Stale;
@@ -1768,6 +1880,11 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
             TileRecord.VertexCount = (*TileObject)->GetIntegerField(TEXT("vertex_count"));
             TileRecord.TriangleCount = (*TileObject)->GetIntegerField(TEXT("triangle_count"));
             TileRecord.MeshPath = (*TileObject)->GetStringField(TEXT("mesh_path"));
+            (*TileObject)->TryGetStringField(TEXT("mesh_format"), TileRecord.MeshFormat);
+            if (TileRecord.MeshFormat.IsEmpty())
+            {
+                TileRecord.MeshFormat = SurfaceTileFormatJson;
+            }
             TileRecord.Status = (*TileObject)->GetStringField(TEXT("status"));
             if ((*TileObject)->HasField(TEXT("input_point_count")))
             {
@@ -1800,8 +1917,9 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
             Manifest.Tiles.Add(TileRecord);
 
             FCSTopoLoadedSurfaceTile LoadedTile;
-            if (LoadTileGeometry(TileRecord.MeshPath, LoadedTile, ErrorMessage))
+            if (LoadTileGeometry(TileRecord.MeshPath, TileRecord.MeshFormat, LoadedTile, ErrorMessage))
             {
+                LoadedTile.TileId = TileRecord.TileId;
                 LoadedTile.BoundaryEdgeCount = TileRecord.BoundaryEdgeCount;
                 LoadedTile.BoundaryLoopCount = TileRecord.BoundaryLoopCount;
                 Loaded.Tiles.Add(MoveTemp(LoadedTile));

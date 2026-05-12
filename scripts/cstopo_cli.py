@@ -147,7 +147,14 @@ def cmd_build_surface(args: argparse.Namespace) -> None:
     cache_dir = Path(args.cache_dir) if args.cache_dir else Path(project.cache_manifest_path).parent / "cache"
     progress_path = Path(args.progress_path) if args.progress_path else None
     try:
-        manifest = build_surface_cache(project, source_id, cache_dir, force_rebuild=args.force, progress_path=progress_path)
+        manifest = build_surface_cache(
+            project,
+            source_id,
+            cache_dir,
+            force_rebuild=args.force,
+            progress_path=progress_path,
+            surface_build_workers=args.surface_build_workers,
+        )
     except Exception as exc:
         write_surface_build_progress(progress_path, 1.0, "Failed", f"Surface build failed: {exc}", 1, 1)
         raise
@@ -227,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_surface.add_argument("--tin-decimation-mode", choices=["PreserveExtremesAdaptive"], help="TIN decimation mode used only above the point cap")
     build_surface.add_argument("--global-tin-max-points", type=int, help="maximum unique ground points accepted by GlobalDelaunayTIN")
     build_surface.add_argument("--surface-collision-mode", choices=["RuntimeVisibleStitchedTIN"], help="runtime collision strategy for derived surface tiles")
+    build_surface.add_argument("--surface-build-workers", type=int, default=0, help="tile-writing worker count; 0 chooses a conservative automatic count")
     build_surface.add_argument("--progress-path", help="optional JSON file updated with surface build progress")
     build_surface.add_argument("--force", action="store_true", help="rebuild surface even if a manifest already exists")
     build_surface.set_defaults(func=cmd_build_surface)
