@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import csv
+import heapq
 import json
 import math
 import os
 import shutil
 import struct
 import subprocess
+import sys
+import tempfile
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,7 +23,7 @@ from typing import Dict, Iterator, List, Optional, Sequence, Set, Tuple
 Point3 = Tuple[float, float, float]
 INTERNAL_CONTROL_CODES = {"PT"}
 DEFAULT_QGIS_PDAL = Path(r"C:\Program Files\QGIS 3.40.12\bin\pdal.exe")
-SURFACE_MANIFEST_SCHEMA_VERSION = "5.1"
+SURFACE_MANIFEST_SCHEMA_VERSION = "6.0"
 SURFACE_BUILD_METHOD_TIN = "BufferedDelaunayTIN"
 SURFACE_BUILD_METHOD_GLOBAL_TIN = "GlobalDelaunayTIN"
 SOURCE_POINT_PRECISION = 0.01
@@ -345,6 +348,14 @@ class DerivedSurfaceManifest:
     seam_audit_status: str = "NotRun"
     seam_audit_message: str = ""
     build_timings_seconds: Dict[str, float] = field(default_factory=dict)
+    build_memory_megabytes: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    peak_memory_megabytes: float = 0.0
+    memory_estimate_megabytes: float = 0.0
+    memory_limited_stage: str = ""
+    audit_memory_mode: str = "auto"
+    audit_estimate_megabytes: float = 0.0
+    audit_memory_budget_megabytes: float = 0.0
+    physical_memory_megabytes: float = 0.0
 
 
 @dataclass
@@ -716,6 +727,14 @@ def derived_surface_from_dict(raw: dict) -> DerivedSurfaceManifest:
         seam_audit_status=raw.get("seam_audit_status", "NotRun"),
         seam_audit_message=raw.get("seam_audit_message", ""),
         build_timings_seconds=dict(raw.get("build_timings_seconds", {})),
+        build_memory_megabytes=dict(raw.get("build_memory_megabytes", {})),
+        peak_memory_megabytes=raw.get("peak_memory_megabytes", 0.0),
+        memory_estimate_megabytes=raw.get("memory_estimate_megabytes", 0.0),
+        memory_limited_stage=raw.get("memory_limited_stage", ""),
+        audit_memory_mode=raw.get("audit_memory_mode", "auto"),
+        audit_estimate_megabytes=raw.get("audit_estimate_megabytes", 0.0),
+        audit_memory_budget_megabytes=raw.get("audit_memory_budget_megabytes", 0.0),
+        physical_memory_megabytes=raw.get("physical_memory_megabytes", 0.0),
     )
 
 
@@ -1628,6 +1647,14 @@ def write_surface_build_progress(
     current: int = 0,
     total: int = 0,
     build_timings_seconds: Optional[Dict[str, float]] = None,
+    build_memory_megabytes: Optional[Dict[str, Dict[str, float]]] = None,
+    peak_memory_megabytes: float = 0.0,
+    memory_estimate_megabytes: float = 0.0,
+    memory_limited_stage: str = "",
+    audit_memory_mode: str = "",
+    audit_estimate_megabytes: float = 0.0,
+    audit_memory_budget_megabytes: float = 0.0,
+    physical_memory_megabytes: float = 0.0,
 ) -> None:
     if progress_path is None:
         return
@@ -1644,6 +1671,22 @@ def write_surface_build_progress(
     }
     if build_timings_seconds:
         payload["build_timings_seconds"] = dict(sorted(build_timings_seconds.items()))
+    if build_memory_megabytes is not None:
+        payload["build_memory_megabytes"] = dict(sorted(build_memory_megabytes.items()))
+    if build_memory_megabytes is not None or peak_memory_megabytes > 0.0:
+        payload["peak_memory_megabytes"] = round(float(peak_memory_megabytes), 3)
+    if memory_estimate_megabytes > 0.0:
+        payload["memory_estimate_megabytes"] = round(float(memory_estimate_megabytes), 3)
+    if memory_limited_stage:
+        payload["memory_limited_stage"] = memory_limited_stage
+    if audit_memory_mode:
+        payload["audit_memory_mode"] = audit_memory_mode
+    if audit_estimate_megabytes > 0.0:
+        payload["audit_estimate_megabytes"] = round(float(audit_estimate_megabytes), 3)
+    if audit_memory_budget_megabytes > 0.0:
+        payload["audit_memory_budget_megabytes"] = round(float(audit_memory_budget_megabytes), 3)
+    if physical_memory_megabytes > 0.0:
+        payload["physical_memory_megabytes"] = round(float(physical_memory_megabytes), 3)
     serialized = json.dumps(payload, indent=2)
     temp_path = progress_path.with_name(f"{progress_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
@@ -1693,6 +1736,157 @@ def _timed_progress_message(message: str, timings: Dict[str, float], stage: str)
     return f"{message} ({_format_elapsed(elapsed)})"
 
 
+def _process_memory_megabytes() -> Tuple[float, float]:
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class ProcessMemoryCounters(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(ProcessMemoryCounters)
+            ctypes.windll.kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            ctypes.windll.psapi.GetProcessMemoryInfo.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(ProcessMemoryCounters),
+                wintypes.DWORD,
+            ]
+            ctypes.windll.psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            if ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                return counters.WorkingSetSize / 1048576.0, counters.PeakWorkingSetSize / 1048576.0
+        except Exception:
+            pass
+    try:
+        import resource
+
+        peak = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        if sys.platform == "darwin":
+            peak /= 1048576.0
+        else:
+            peak /= 1024.0
+        return 0.0, peak
+    except Exception:
+        return 0.0, 0.0
+
+
+def _snapshot_surface_build_memory(
+    memory_snapshots: Optional[Dict[str, Dict[str, float]]],
+    stage: str,
+) -> float:
+    current_mb, peak_mb = _process_memory_megabytes()
+    if memory_snapshots is not None and (current_mb > 0.0 or peak_mb > 0.0):
+        memory_snapshots[stage] = {
+            "current": round(float(current_mb), 3),
+            "peak": round(float(peak_mb), 3),
+        }
+    return float(peak_mb)
+
+
+def _total_physical_memory_megabytes() -> float:
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = MemoryStatusEx()
+            status.dwLength = ctypes.sizeof(MemoryStatusEx)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return status.ullTotalPhys / 1048576.0
+        except Exception:
+            pass
+    try:
+        if hasattr(os, "sysconf"):
+            pages = os.sysconf("SC_PHYS_PAGES")
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            return (pages * page_size) / 1048576.0
+    except Exception:
+        pass
+    return 0.0
+
+
+def _estimate_global_tin_memory_megabytes(point_count: int) -> float:
+    point_count = max(0, int(point_count))
+    expected_triangles = max(0, point_count * 2)
+    expected_edges = max(0, expected_triangles * 3)
+    estimated_bytes = (
+        point_count * 1300
+        + expected_triangles * (3 * 4 + 84)
+        + expected_edges * (8 + 16)
+    )
+    return estimated_bytes / 1048576.0
+
+
+@dataclass
+class TinAuditMemoryPlan:
+    mode: str = "inMemory"
+    chunk_triangle_count: int = 0
+    estimate_megabytes: float = 0.0
+    budget_megabytes: float = 0.0
+    physical_memory_megabytes: float = 0.0
+
+
+def _estimate_tin_audit_memory_megabytes(triangle_count: int) -> float:
+    triangle_count = max(0, int(triangle_count))
+    # Covers duplicate sort temps, edge-key sort temps, and a conservative overhead cushion.
+    return (triangle_count * 420.0) / 1048576.0
+
+
+def _plan_tin_audit_memory(
+    triangle_count: int,
+    requested_mode: str = "auto",
+    memory_fraction: float = 0.45,
+    physical_memory_megabytes: Optional[float] = None,
+    current_memory_megabytes: Optional[float] = None,
+) -> TinAuditMemoryPlan:
+    requested_mode = (requested_mode or "auto").strip().lower().replace("_", "-")
+    memory_fraction = min(max(float(memory_fraction or 0.45), 0.10), 0.85)
+    physical_memory = float(physical_memory_megabytes) if physical_memory_megabytes is not None else _total_physical_memory_megabytes()
+    current_memory = float(current_memory_megabytes) if current_memory_megabytes is not None else _process_memory_megabytes()[0]
+    estimate = _estimate_tin_audit_memory_megabytes(triangle_count)
+    budget = physical_memory * memory_fraction if physical_memory > 0.0 else 0.0
+
+    if requested_mode in {"in-memory", "inmemory"}:
+        return TinAuditMemoryPlan("inMemory", 0, estimate, budget, physical_memory)
+    if requested_mode in {"chunked-disk", "chunkeddisk"}:
+        return TinAuditMemoryPlan("chunkedDisk", 5_000_000, estimate, budget, physical_memory)
+
+    if physical_memory <= 0.0 or budget <= 0.0:
+        return TinAuditMemoryPlan("chunkedDisk", 5_000_000, estimate, budget, physical_memory)
+
+    available_budget = max(0.0, budget - max(current_memory, 0.0))
+    if estimate <= available_budget:
+        return TinAuditMemoryPlan("inMemory", 0, estimate, budget, physical_memory)
+    if estimate <= max(available_budget * 1.75, 1024.0):
+        return TinAuditMemoryPlan("chunkedMemory", 2_000_000, estimate, budget, physical_memory)
+    return TinAuditMemoryPlan("chunkedDisk", 2_000_000, estimate, budget, physical_memory)
+
+
 @contextmanager
 def _optional_surface_build_timer(timings: Optional[Dict[str, float]], stage: str) -> Iterator[None]:
     if timings is None:
@@ -1715,23 +1909,31 @@ def _classification_support(stats: dict) -> Tuple[bool, bool]:
     return False, False
 
 
-def _build_ground_pipeline(source: PointCloudSource, output_path: Path, classification_method: str) -> list:
+def _build_ground_pipeline(
+    source: PointCloudSource,
+    output_path: Path,
+    classification_method: str,
+    build_timings_seconds: Optional[Dict[str, float]] = None,
+) -> list:
     reader_type = "readers.copc" if source.source_path.lower().endswith(".copc.laz") else "readers.las"
     pipeline = [{"type": reader_type, "filename": source.source_path.replace("\\", "/")}]
-    stats = read_pdal_stats(Path(source.source_path))
-    has_classification, has_ground = _classification_support(stats)
-    if has_classification and has_ground:
-        ground_source = "existingClassification"
-        pipeline.append({"type": "filters.range", "limits": "Classification[2:2]"})
+    ground_source = "pdalClassified"
+    if classification_method.upper() == "PMF":
+        pipeline.append({"type": "filters.pmf"})
     else:
-        ground_source = "pdalClassified"
-        if classification_method.upper() == "PMF":
-            pipeline.append({"type": "filters.pmf"})
-        else:
-            pipeline.append({"type": "filters.smrf"})
-        pipeline.append({"type": "filters.range", "limits": "Classification[2:2]"})
+        pipeline.append({"type": "filters.smrf"})
+    pipeline.append({"type": "filters.range", "limits": "Classification[2:2]"})
     pipeline.append({"type": "writers.las", "filename": str(output_path).replace("\\", "/")})
     return pipeline, ground_source
+
+
+def _build_existing_ground_pipeline(source: PointCloudSource, output_path: Path) -> list:
+    reader_type = "readers.copc" if source.source_path.lower().endswith(".copc.laz") else "readers.las"
+    return [
+        {"type": reader_type, "filename": source.source_path.replace("\\", "/")},
+        {"type": "filters.range", "limits": "Classification[2:2]"},
+        {"type": "writers.las", "filename": str(output_path).replace("\\", "/")},
+    ]
 
 
 def _read_las_xyz_points_python(source_path: Path, header: Optional[LasHeaderInfo] = None) -> List[Point3]:
@@ -1754,11 +1956,15 @@ def _read_las_xyz_points_python(source_path: Path, header: Optional[LasHeaderInf
     return points
 
 
-def _read_las_xyz_points_numpy(source_path: Path, header: LasHeaderInfo) -> List[Point3]:
+def _read_las_xyz_array_numpy(source_path: Path, header: LasHeaderInfo):
     if header.point_record_length < 12:
         raise ValueError(f"{source_path} does not contain readable XYZ point records.")
     if header.point_count <= 0:
-        return []
+        try:
+            import numpy as np
+        except ImportError as exc:
+            raise RuntimeError("numpy is not available for fast LAS XYZ reads.") from exc
+        return np.empty((0, 3), dtype=np.float64)
 
     try:
         import numpy as np
@@ -1783,7 +1989,11 @@ def _read_las_xyz_points_numpy(source_path: Path, header: LasHeaderInfo) -> List
     xyz[:, 0] = (xyz[:, 0] * header.scale[0]) + header.offset[0]
     xyz[:, 1] = (xyz[:, 1] * header.scale[1]) + header.offset[1]
     xyz[:, 2] = (xyz[:, 2] * header.scale[2]) + header.offset[2]
-    return [tuple(row) for row in xyz.tolist()]
+    return xyz
+
+
+def _read_las_xyz_points_numpy(source_path: Path, header: LasHeaderInfo) -> List[Point3]:
+    return [tuple(row) for row in _read_las_xyz_array_numpy(source_path, header).tolist()]
 
 
 def _read_las_xyz_points(source_path: Path) -> List[Point3]:
@@ -1792,6 +2002,11 @@ def _read_las_xyz_points(source_path: Path) -> List[Point3]:
         return _read_las_xyz_points_numpy(source_path, header)
     except Exception:
         return _read_las_xyz_points_python(source_path, header)
+
+
+def _read_las_xyz_array(source_path: Path):
+    header = read_las_header(source_path)
+    return _read_las_xyz_array_numpy(source_path, header)
 
 
 def _fill_height_grid(
@@ -2045,6 +2260,48 @@ def _dedupe_xy_points(points: Sequence[Point3]) -> List[Point3]:
     return [(x, y, zsum / count) for x, y, zsum, count in grouped.values()]
 
 
+def _structured_xy_keys_from_array(points_array, precision: float = SOURCE_POINT_PRECISION):
+    import numpy as np
+
+    xy_keys = np.rint(points_array[:, :2] / precision).astype(np.int64, copy=False)
+    return np.ascontiguousarray(xy_keys).view(np.dtype([("x", "<i8"), ("y", "<i8")])).reshape(-1)
+
+
+def _packed_xy_keys_from_array(points_array, precision: float = SOURCE_POINT_PRECISION):
+    import numpy as np
+
+    xy_keys = np.rint(points_array[:, :2] / precision).astype(np.int64, copy=False)
+    min_xy = xy_keys.min(axis=0)
+    normalized = xy_keys - min_xy
+    if normalized[:, 0].max() > np.iinfo(np.uint32).max or normalized[:, 1].max() > np.iinfo(np.uint32).max:
+        return None
+    return (normalized[:, 0].astype(np.uint64) << np.uint64(32)) | normalized[:, 1].astype(np.uint64)
+
+
+def _dedupe_xy_points_numpy(points):
+    import numpy as np
+
+    points_array = _points_to_numpy_xyz(points)
+    if len(points_array) == 0:
+        return points_array
+
+    xy_keys = _packed_xy_keys_from_array(points_array)
+    if xy_keys is None:
+        xy_keys = _structured_xy_keys_from_array(points_array)
+    _unique_keys, first_indices, inverse, counts = np.unique(
+        xy_keys,
+        return_index=True,
+        return_inverse=True,
+        return_counts=True,
+    )
+    z_sums = np.bincount(inverse, weights=points_array[:, 2])
+    output_order = np.argsort(first_indices, kind="stable")
+    retained_indices = first_indices[output_order]
+    deduped = points_array[retained_indices].copy()
+    deduped[:, 2] = z_sums[output_order] / counts[output_order]
+    return deduped
+
+
 @dataclass
 class TinBoundaryDiagnostics:
     input_triangle_count: int = 0
@@ -2095,19 +2352,38 @@ def _estimate_tin_point_spacing(points: Sequence[Point3]) -> float:
     if len(points) < 2:
         return SOURCE_POINT_PRECISION
 
-    min_x = min(point[0] for point in points)
-    max_x = max(point[0] for point in points)
-    min_y = min(point[1] for point in points)
-    max_y = max(point[1] for point in points)
+    try:
+        import numpy as np
+        points_array = np.asarray(points)
+    except Exception:
+        points_array = None
+
+    if points_array is not None and points_array.ndim == 2 and points_array.shape[1] >= 2:
+        min_x = float(points_array[:, 0].min())
+        max_x = float(points_array[:, 0].max())
+        min_y = float(points_array[:, 1].min())
+        max_y = float(points_array[:, 1].max())
+    else:
+        min_x = min(point[0] for point in points)
+        max_x = max(point[0] for point in points)
+        min_y = min(point[1] for point in points)
+        max_y = max(point[1] for point in points)
     area = max((max_x - min_x) * (max_y - min_y), SOURCE_POINT_PRECISION * SOURCE_POINT_PRECISION)
     density_spacing = max(math.sqrt(area / len(points)), SOURCE_POINT_PRECISION)
 
     sample_count = min(len(points), 512)
-    if len(points) == sample_count:
-        sample = list(points)
+    if points_array is not None and points_array.ndim == 2 and points_array.shape[1] >= 2:
+        if len(points) == sample_count:
+            sample = points_array
+        else:
+            sample_indices = np.rint(np.linspace(0, len(points) - 1, sample_count)).astype(np.int64)
+            sample = points_array[sample_indices]
     else:
-        stride = (len(points) - 1) / float(sample_count - 1)
-        sample = [points[min(int(round(index * stride)), len(points) - 1)] for index in range(sample_count)]
+        if len(points) == sample_count:
+            sample = list(points)
+        else:
+            stride = (len(points) - 1) / float(sample_count - 1)
+            sample = [points[min(int(round(index * stride)), len(points) - 1)] for index in range(sample_count)]
 
     nearest: List[float] = []
     for index, point in enumerate(sample):
@@ -2282,7 +2558,10 @@ def _points_to_numpy_xyz(points: Sequence[Point3]):
         import numpy as np
     except ImportError as exc:
         raise RuntimeError("numpy is required for fast GlobalDelaunayTIN surface builds.") from exc
-    return np.asarray(points, dtype=np.float64)
+    points_array = np.asarray(points, dtype=np.float64)
+    if points_array.ndim != 2 or points_array.shape[1] != 3:
+        raise ValueError("TIN point arrays must have shape Nx3.")
+    return points_array
 
 
 def _triangulate_tin_point_arrays(points: Sequence[Point3]):
@@ -2527,54 +2806,71 @@ def _filter_tin_triangle_indices_numpy(
     if len(triangle_indices) == 0:
         return triangle_indices, diagnostics
 
-    coords = vertices_xyz[triangle_indices]
-    x = coords[:, :, 0]
-    y = coords[:, :, 1]
-    z = coords[:, :, 2]
-    area = np.abs(
-        (x[:, 2] * y[:, 0] - x[:, 0] * y[:, 2])
-        + (x[:, 0] * y[:, 1] - x[:, 1] * y[:, 0])
-        + (x[:, 1] * y[:, 2] - x[:, 2] * y[:, 1])
-    ) * 0.5
-
     reason = np.zeros(len(triangle_indices), dtype=np.uint8)
     large_reason = np.uint8(1)
     bounds_reason = np.uint8(2)
     z_delta_reason = np.uint8(3)
+    vertex_x = vertices_xyz[:, 0]
+    vertex_y = vertices_xyz[:, 1]
+    vertex_z = vertices_xyz[:, 2]
+    batch_size = 2_000_000
+    for start in range(0, len(triangle_indices), batch_size):
+        end = min(start + batch_size, len(triangle_indices))
+        batch = triangle_indices[start:end]
+        tri_a = batch[:, 0]
+        tri_b = batch[:, 1]
+        tri_c = batch[:, 2]
+        x0 = vertex_x[tri_a]
+        y0 = vertex_y[tri_a]
+        z0 = vertex_z[tri_a]
+        x1 = vertex_x[tri_b]
+        y1 = vertex_y[tri_b]
+        z1 = vertex_z[tri_b]
+        x2 = vertex_x[tri_c]
+        y2 = vertex_y[tri_c]
+        z2 = vertex_z[tri_c]
 
-    reason[area <= 1.0e-8] = large_reason
+        area = np.abs(
+            (x2 * y0 - x0 * y2)
+            + (x0 * y1 - x1 * y0)
+            + (x1 * y2 - x2 * y1)
+        ) * 0.5
+        batch_reason = reason[start:end]
+        batch_reason[area <= 1.0e-8] = large_reason
 
-    unresolved = reason == 0
-    centroid_x = x.mean(axis=1)
-    centroid_y = y.mean(axis=1)
-    reason[
-        unresolved
-        & (
-            (centroid_x < source_min_x)
-            | (centroid_x > source_max_x)
-            | (centroid_y < source_min_y)
-            | (centroid_y > source_max_y)
-        )
-    ] = bounds_reason
+        unresolved = batch_reason == 0
+        centroid_x = (x0 + x1 + x2) / 3.0
+        centroid_y = (y0 + y1 + y2) / 3.0
+        batch_reason[
+            unresolved
+            & (
+                (centroid_x < source_min_x)
+                | (centroid_x > source_max_x)
+                | (centroid_y < source_min_y)
+                | (centroid_y > source_max_y)
+            )
+        ] = bounds_reason
 
-    unresolved = reason == 0
-    edge01 = np.hypot(x[:, 0] - x[:, 1], y[:, 0] - y[:, 1])
-    edge12 = np.hypot(x[:, 1] - x[:, 2], y[:, 1] - y[:, 2])
-    edge20 = np.hypot(x[:, 2] - x[:, 0], y[:, 2] - y[:, 0])
-    large_mask = np.zeros(len(triangle_indices), dtype=bool)
-    if max_edge_length > 0.0:
-        large_mask |= np.maximum(np.maximum(edge01, edge12), edge20) > max_edge_length
-    if diagnostics.resolved_max_area > 0.0:
-        large_mask |= area > diagnostics.resolved_max_area
-    if max_edge_length > 0.0:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            circumradius = (edge01 * edge12 * edge20) / (4.0 * area)
-        large_mask |= circumradius > max_edge_length
-    reason[unresolved & large_mask] = large_reason
+        unresolved = batch_reason == 0
+        edge01 = np.hypot(x0 - x1, y0 - y1)
+        edge12 = np.hypot(x1 - x2, y1 - y2)
+        edge20 = np.hypot(x2 - x0, y2 - y0)
+        large_mask = np.zeros(end - start, dtype=bool)
+        if max_edge_length > 0.0:
+            large_mask |= np.maximum(np.maximum(edge01, edge12), edge20) > max_edge_length
+        if diagnostics.resolved_max_area > 0.0:
+            large_mask |= area > diagnostics.resolved_max_area
+        if max_edge_length > 0.0:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                circumradius = (edge01 * edge12 * edge20) / (4.0 * area)
+            large_mask |= circumradius > max_edge_length
+        batch_reason[unresolved & large_mask] = large_reason
 
-    if max_triangle_z_delta is not None:
-        unresolved = reason == 0
-        reason[unresolved & ((z.max(axis=1) - z.min(axis=1)) > max_triangle_z_delta)] = z_delta_reason
+        if max_triangle_z_delta is not None:
+            unresolved = batch_reason == 0
+            z_max = np.maximum(np.maximum(z0, z1), z2)
+            z_min = np.minimum(np.minimum(z0, z1), z2)
+            batch_reason[unresolved & ((z_max - z_min) > max_triangle_z_delta)] = z_delta_reason
 
     retained = triangle_indices[reason == 0]
     diagnostics.retained_triangle_count = int(len(retained))
@@ -2582,6 +2878,271 @@ def _filter_tin_triangle_indices_numpy(
     diagnostics.rejected_bounds_count = int(np.count_nonzero(reason == bounds_reason))
     diagnostics.rejected_z_delta_count = int(np.count_nonzero(reason == z_delta_reason))
     return retained.astype(np.uint32, copy=False), diagnostics
+
+
+def _structured_triangle_keys(triangle_indices):
+    import numpy as np
+
+    sorted_triangles = np.sort(np.asarray(triangle_indices, dtype=np.uint32), axis=1)
+    return np.ascontiguousarray(sorted_triangles).view(
+        np.dtype([("a", "<u4"), ("b", "<u4"), ("c", "<u4")])
+    ).reshape(-1)
+
+
+def _unique_triangle_first_indices_and_duplicate_count(triangle_indices, chunk_triangle_count: int = 0, chunk_storage: str = "disk"):
+    import numpy as np
+
+    if len(triangle_indices) == 0:
+        return np.empty(0, dtype=np.int64), 0
+    if chunk_triangle_count > 0 and len(triangle_indices) > chunk_triangle_count:
+        chunk_storage = (chunk_storage or "disk").lower()
+        if chunk_storage == "memory":
+            key_arrays = []
+            index_arrays = []
+            for start in range(0, len(triangle_indices), chunk_triangle_count):
+                end = min(start + chunk_triangle_count, len(triangle_indices))
+                chunk = np.asarray(triangle_indices[start:end], dtype=np.uint32)
+                sorted_triangles = np.sort(chunk, axis=1)
+                order = np.lexsort((sorted_triangles[:, 2], sorted_triangles[:, 1], sorted_triangles[:, 0]))
+                key_arrays.append(sorted_triangles[order])
+                index_arrays.append((np.arange(start, end, dtype=np.int64))[order])
+
+            positions = [0 for _item in key_arrays]
+            heap: List[Tuple[Tuple[int, int, int], int]] = []
+            for chunk_index, keys in enumerate(key_arrays):
+                if len(keys) > 0:
+                    key = keys[0]
+                    heapq.heappush(heap, ((int(key[0]), int(key[1]), int(key[2])), chunk_index))
+
+            first_indices: List[int] = []
+            duplicate_count = 0
+            active_key: Optional[Tuple[int, int, int]] = None
+            active_count = 0
+            active_first_index = 0
+            while heap:
+                key, chunk_index = heapq.heappop(heap)
+                position = positions[chunk_index]
+                original_index = int(index_arrays[chunk_index][position])
+                if active_key is None:
+                    active_key = key
+                    active_count = 1
+                    active_first_index = original_index
+                elif key == active_key:
+                    active_count += 1
+                    active_first_index = min(active_first_index, original_index)
+                else:
+                    first_indices.append(active_first_index)
+                    duplicate_count += active_count - 1
+                    active_key = key
+                    active_count = 1
+                    active_first_index = original_index
+                position += 1
+                positions[chunk_index] = position
+                if position < len(key_arrays[chunk_index]):
+                    next_key = key_arrays[chunk_index][position]
+                    heapq.heappush(heap, ((int(next_key[0]), int(next_key[1]), int(next_key[2])), chunk_index))
+            if active_key is not None:
+                first_indices.append(active_first_index)
+                duplicate_count += active_count - 1
+            return np.asarray(first_indices, dtype=np.int64), int(duplicate_count)
+
+        chunk_paths: List[Tuple[Path, Path]] = []
+        with tempfile.TemporaryDirectory(prefix="cstopo_tin_duplicate_audit_") as temp_dir:
+            temp_root = Path(temp_dir)
+            for chunk_index, start in enumerate(range(0, len(triangle_indices), chunk_triangle_count)):
+                end = min(start + chunk_triangle_count, len(triangle_indices))
+                chunk = np.asarray(triangle_indices[start:end], dtype=np.uint32)
+                sorted_triangles = np.sort(chunk, axis=1)
+                order = np.lexsort((sorted_triangles[:, 2], sorted_triangles[:, 1], sorted_triangles[:, 0]))
+                sorted_keys = sorted_triangles[order]
+                original_indices = (np.arange(start, end, dtype=np.int64))[order]
+                key_path = temp_root / f"duplicate_keys_{chunk_index}.npy"
+                index_path = temp_root / f"duplicate_indices_{chunk_index}.npy"
+                np.save(key_path, sorted_keys)
+                np.save(index_path, original_indices)
+                chunk_paths.append((key_path, index_path))
+
+            key_arrays = [np.load(key_path, mmap_mode="r") for key_path, _index_path in chunk_paths]
+            index_arrays = [np.load(index_path, mmap_mode="r") for _key_path, index_path in chunk_paths]
+            positions = [0 for _item in chunk_paths]
+            heap: List[Tuple[Tuple[int, int, int], int]] = []
+            for chunk_index, keys in enumerate(key_arrays):
+                if len(keys) > 0:
+                    key = keys[0]
+                    heapq.heappush(heap, ((int(key[0]), int(key[1]), int(key[2])), chunk_index))
+
+            first_indices: List[int] = []
+            duplicate_count = 0
+            active_key: Optional[Tuple[int, int, int]] = None
+            active_count = 0
+            active_first_index = 0
+            while heap:
+                key, chunk_index = heapq.heappop(heap)
+                position = positions[chunk_index]
+                original_index = int(index_arrays[chunk_index][position])
+                if active_key is None:
+                    active_key = key
+                    active_count = 1
+                    active_first_index = original_index
+                elif key == active_key:
+                    active_count += 1
+                    active_first_index = min(active_first_index, original_index)
+                else:
+                    first_indices.append(active_first_index)
+                    duplicate_count += active_count - 1
+                    active_key = key
+                    active_count = 1
+                    active_first_index = original_index
+                position += 1
+                positions[chunk_index] = position
+                if position < len(key_arrays[chunk_index]):
+                    next_key = key_arrays[chunk_index][position]
+                    heapq.heappush(heap, ((int(next_key[0]), int(next_key[1]), int(next_key[2])), chunk_index))
+
+            if active_key is not None:
+                first_indices.append(active_first_index)
+                duplicate_count += active_count - 1
+            result = np.asarray(first_indices, dtype=np.int64), int(duplicate_count)
+            for array in [*key_arrays, *index_arrays]:
+                mmap = getattr(array, "_mmap", None)
+                if mmap is not None:
+                    mmap.close()
+            del key_arrays, index_arrays
+            return result
+
+    sorted_triangles = np.sort(np.asarray(triangle_indices, dtype=np.uint32), axis=1)
+    order = np.lexsort((sorted_triangles[:, 2], sorted_triangles[:, 1], sorted_triangles[:, 0]))
+    ordered = sorted_triangles[order]
+    group_starts_mask = np.ones(len(ordered), dtype=bool)
+    group_starts_mask[1:] = np.any(ordered[1:] != ordered[:-1], axis=1)
+    group_starts = np.flatnonzero(group_starts_mask)
+    group_ends = np.concatenate((group_starts[1:], [len(ordered)]))
+    counts = group_ends - group_starts
+    first_indices = np.minimum.reduceat(order, group_starts)
+    duplicate_count = int(np.sum(counts - 1))
+    return first_indices, duplicate_count
+
+
+def _packed_undirected_edge_keys(edge_a, edge_b):
+    import numpy as np
+
+    edge_min = np.minimum(edge_a, edge_b).astype(np.uint64, copy=False)
+    edge_max = np.maximum(edge_a, edge_b).astype(np.uint64, copy=False)
+    return (edge_min << np.uint64(32)) | edge_max
+
+
+def _boundary_edge_count_for_triangle_indices(triangle_indices) -> int:
+    import numpy as np
+
+    if len(triangle_indices) == 0:
+        return 0
+    edge_a = triangle_indices[:, (0, 1, 2)].reshape(-1)
+    edge_b = triangle_indices[:, (1, 2, 0)].reshape(-1)
+    edge_keys = _packed_undirected_edge_keys(edge_a, edge_b)
+    _unique_edges, edge_counts = np.unique(edge_keys, return_counts=True)
+    return int(np.count_nonzero(edge_counts == 1))
+
+
+def _nonmanifold_edge_count_for_triangle_indices(triangle_indices, chunk_triangle_count: int = 0, chunk_storage: str = "disk") -> int:
+    import numpy as np
+
+    if len(triangle_indices) == 0:
+        return 0
+    if chunk_triangle_count > 0 and len(triangle_indices) > chunk_triangle_count:
+        chunk_storage = (chunk_storage or "disk").lower()
+        if chunk_storage == "memory":
+            key_arrays = []
+            for start in range(0, len(triangle_indices), chunk_triangle_count):
+                end = min(start + chunk_triangle_count, len(triangle_indices))
+                chunk = np.asarray(triangle_indices[start:end], dtype=np.uint32)
+                edge_a = chunk[:, (0, 1, 2)].reshape(-1)
+                edge_b = chunk[:, (1, 2, 0)].reshape(-1)
+                key_arrays.append(np.sort(_packed_undirected_edge_keys(edge_a, edge_b)))
+
+            positions = [0 for _item in key_arrays]
+            heap: List[Tuple[int, int]] = []
+            for chunk_index, keys in enumerate(key_arrays):
+                if len(keys) > 0:
+                    heapq.heappush(heap, (int(keys[0]), chunk_index))
+
+            nonmanifold_count = 0
+            active_key: Optional[int] = None
+            active_count = 0
+            while heap:
+                key, chunk_index = heapq.heappop(heap)
+                if active_key is None:
+                    active_key = key
+                    active_count = 1
+                elif key == active_key:
+                    active_count += 1
+                else:
+                    if active_count > 2:
+                        nonmanifold_count += 1
+                    active_key = key
+                    active_count = 1
+                positions[chunk_index] += 1
+                position = positions[chunk_index]
+                if position < len(key_arrays[chunk_index]):
+                    heapq.heappush(heap, (int(key_arrays[chunk_index][position]), chunk_index))
+            if active_key is not None and active_count > 2:
+                nonmanifold_count += 1
+            return int(nonmanifold_count)
+
+        chunk_paths: List[Path] = []
+        with tempfile.TemporaryDirectory(prefix="cstopo_tin_edge_audit_") as temp_dir:
+            temp_root = Path(temp_dir)
+            for chunk_index, start in enumerate(range(0, len(triangle_indices), chunk_triangle_count)):
+                end = min(start + chunk_triangle_count, len(triangle_indices))
+                chunk = np.asarray(triangle_indices[start:end], dtype=np.uint32)
+                edge_a = chunk[:, (0, 1, 2)].reshape(-1)
+                edge_b = chunk[:, (1, 2, 0)].reshape(-1)
+                edge_keys = np.sort(_packed_undirected_edge_keys(edge_a, edge_b))
+                path = temp_root / f"edge_keys_{chunk_index}.npy"
+                np.save(path, edge_keys)
+                chunk_paths.append(path)
+
+            key_arrays = [np.load(path, mmap_mode="r") for path in chunk_paths]
+            positions = [0 for _item in chunk_paths]
+            heap: List[Tuple[int, int]] = []
+            for chunk_index, keys in enumerate(key_arrays):
+                if len(keys) > 0:
+                    heapq.heappush(heap, (int(keys[0]), chunk_index))
+
+            nonmanifold_count = 0
+            active_key: Optional[int] = None
+            active_count = 0
+            while heap:
+                key, chunk_index = heapq.heappop(heap)
+                if active_key is None:
+                    active_key = key
+                    active_count = 1
+                elif key == active_key:
+                    active_count += 1
+                else:
+                    if active_count > 2:
+                        nonmanifold_count += 1
+                    active_key = key
+                    active_count = 1
+                positions[chunk_index] += 1
+                position = positions[chunk_index]
+                if position < len(key_arrays[chunk_index]):
+                    heapq.heappush(heap, (int(key_arrays[chunk_index][position]), chunk_index))
+
+            if active_key is not None and active_count > 2:
+                nonmanifold_count += 1
+            result = int(nonmanifold_count)
+            for array in key_arrays:
+                mmap = getattr(array, "_mmap", None)
+                if mmap is not None:
+                    mmap.close()
+            del key_arrays
+            return result
+
+    edge_a = triangle_indices[:, (0, 1, 2)].reshape(-1)
+    edge_b = triangle_indices[:, (1, 2, 0)].reshape(-1)
+    edge_keys = _packed_undirected_edge_keys(edge_a, edge_b)
+    _unique_edges, edge_counts = np.unique(edge_keys, return_counts=True)
+    return int(np.count_nonzero(edge_counts > 2))
 
 
 def _build_supported_tin_triangles(
@@ -3247,6 +3808,10 @@ def _write_global_tin_binary_surface_tile(
 ) -> Optional[SurfaceTileRecord]:
     import numpy as np
 
+    if hasattr(global_triangle_indices, "to_numpy"):
+        global_triangle_indices = global_triangle_indices.to_numpy()
+    else:
+        global_triangle_indices = np.asarray(global_triangle_indices, dtype=np.uint32)
     if global_triangle_indices.size < 3:
         return None
     local_vertex_indices, inverse = np.unique(global_triangle_indices.reshape(-1), return_inverse=True)
@@ -3386,6 +3951,36 @@ def _build_global_tin_tile_data(
     )
 
 
+class TinOwnerTriangleRange:
+    def __init__(self, global_triangle_indices, owner_order, start: int, end: int):
+        self.global_triangle_indices = global_triangle_indices
+        self.owner_order = owner_order
+        self.start = int(start)
+        self.end = int(end)
+
+    def __len__(self) -> int:
+        return max(0, self.end - self.start)
+
+    @property
+    def size(self) -> int:
+        return len(self) * 3
+
+    def to_numpy(self):
+        return self.global_triangle_indices[self.owner_order[self.start:self.end]]
+
+    def __array__(self, dtype=None):
+        import numpy as np
+
+        array = self.to_numpy()
+        return np.asarray(array, dtype=dtype) if dtype is not None else array
+
+    def __iter__(self):
+        return iter(self.to_numpy())
+
+    def __getitem__(self, item):
+        return self.to_numpy()[item]
+
+
 def _build_global_tin_array_tile_data(
     points: Sequence[Point3],
     source_min_x: float,
@@ -3401,13 +3996,18 @@ def _build_global_tin_array_tile_data(
     max_triangle_z_delta: Optional[float],
     points_are_unique: bool = False,
     build_timings_seconds: Optional[Dict[str, float]] = None,
+    build_memory_megabytes: Optional[Dict[str, Dict[str, float]]] = None,
+    audit_memory_mode: str = "auto",
+    audit_memory_fraction: float = 0.45,
+    audit_telemetry: Optional[Dict[str, float]] = None,
 ):
     import numpy as np
 
-    unique_points = list(points) if points_are_unique else _dedupe_xy_points(points)
+    unique_points = _points_to_numpy_xyz(points) if points_are_unique else _dedupe_xy_points_numpy(points)
     max_edge_length = _resolve_tin_max_edge_length(unique_points, configured_edge_length, edge_multiplier)
     with _optional_surface_build_timer(build_timings_seconds, "tin_triangulation"):
         vertices_xyz, raw_triangles, triangulation_status = _triangulate_tin_point_arrays(unique_points)
+    _snapshot_surface_build_memory(build_memory_megabytes, "tin_triangulation")
     with _optional_surface_build_timer(build_timings_seconds, "tin_filtering"):
         retained_triangles, diagnostics = _filter_tin_triangle_indices_numpy(
             vertices_xyz,
@@ -3423,72 +4023,83 @@ def _build_global_tin_array_tile_data(
             area_multiplier,
             max_triangle_z_delta,
         )
+    del raw_triangles
+    _snapshot_surface_build_memory(build_memory_megabytes, "tin_filtering")
     diagnostics.constrained_triangulation_status = triangulation_status
 
     with _optional_surface_build_timer(build_timings_seconds, "tin_ownership_audit"):
         if len(retained_triangles) == 0:
             return vertices_xyz, {}, {}, diagnostics, "Passed", "Global TIN produced no retained triangles."
 
-        tri_vertices = vertices_xyz[retained_triangles]
-        centroid_x = tri_vertices[:, :, 0].mean(axis=1)
-        centroid_y = tri_vertices[:, :, 1].mean(axis=1)
-        ownerless_mask = (
-            (centroid_x < source_min_x)
-            | (centroid_x > source_max_x)
-            | (centroid_y < source_min_y)
-            | (centroid_y > source_max_y)
+        audit_plan = _plan_tin_audit_memory(
+            len(retained_triangles),
+            requested_mode=audit_memory_mode,
+            memory_fraction=audit_memory_fraction,
         )
-        tile_x = np.clip(np.floor((centroid_x - source_min_x) / tile_size).astype(np.int64), 0, max_tile_x)
-        tile_y = np.clip(np.floor((centroid_y - source_min_y) / tile_size).astype(np.int64), 0, max_tile_y)
-        owner_ids = (tile_x * (max_tile_y + 1)) + tile_y
+        if audit_telemetry is not None:
+            audit_telemetry["audit_memory_mode"] = audit_plan.mode
+            audit_telemetry["audit_estimate_megabytes"] = audit_plan.estimate_megabytes
+            audit_telemetry["audit_memory_budget_megabytes"] = audit_plan.budget_megabytes
+            audit_telemetry["physical_memory_megabytes"] = audit_plan.physical_memory_megabytes
+        audit_chunk_storage = "memory" if audit_plan.mode == "chunkedMemory" else "disk"
 
-        sorted_triangle_keys = np.sort(retained_triangles, axis=1)
-        unique_triangle_keys, first_indices, triangle_key_counts = np.unique(
-            sorted_triangle_keys,
-            axis=0,
-            return_index=True,
-            return_counts=True,
-        )
-        duplicate_triangle_count = int(np.count_nonzero(triangle_key_counts > 1))
-        keep_indices = np.sort(first_indices[~ownerless_mask[first_indices]])
-        retained_triangles = retained_triangles[keep_indices]
-        owner_ids = owner_ids[keep_indices]
-        tile_x = tile_x[keep_indices]
-        tile_y = tile_y[keep_indices]
+        with _optional_surface_build_timer(build_timings_seconds, "owner_assignment"):
+            vertex_x = vertices_xyz[:, 0]
+            vertex_y = vertices_xyz[:, 1]
+            tri_a = retained_triangles[:, 0]
+            tri_b = retained_triangles[:, 1]
+            tri_c = retained_triangles[:, 2]
+            centroid_x = (vertex_x[tri_a] + vertex_x[tri_b] + vertex_x[tri_c]) / 3.0
+            centroid_y = (vertex_y[tri_a] + vertex_y[tri_b] + vertex_y[tri_c]) / 3.0
+            ownerless_mask = (
+                (centroid_x < source_min_x)
+                | (centroid_x > source_max_x)
+                | (centroid_y < source_min_y)
+                | (centroid_y > source_max_y)
+            )
+            tile_x = np.clip(np.floor((centroid_x - source_min_x) / tile_size).astype(np.int64), 0, max_tile_x)
+            tile_y = np.clip(np.floor((centroid_y - source_min_y) / tile_size).astype(np.int64), 0, max_tile_y)
+            owner_ids = ((tile_x * (max_tile_y + 1)) + tile_y).astype(np.uint32, copy=False)
+        _snapshot_surface_build_memory(build_memory_megabytes, "owner_assignment")
 
-        tile_triangles_by_owner: Dict[Tuple[int, int], object] = {}
-        unique_owner_ids = np.unique(owner_ids)
-        for owner_id in unique_owner_ids:
-            owner_mask = owner_ids == owner_id
-            first = int(np.flatnonzero(owner_mask)[0])
-            owner = (int(tile_x[first]), int(tile_y[first]))
-            tile_triangles_by_owner[owner] = retained_triangles[owner_mask]
+        with _optional_surface_build_timer(build_timings_seconds, "duplicate_audit"):
+            first_indices, duplicate_triangle_count = _unique_triangle_first_indices_and_duplicate_count(
+                retained_triangles,
+                chunk_triangle_count=audit_plan.chunk_triangle_count,
+                chunk_storage=audit_chunk_storage,
+            )
+            ownerless_triangle_count = int(np.count_nonzero(ownerless_mask[first_indices]))
+            keep_indices = np.sort(first_indices[~ownerless_mask[first_indices]])
+            retained_triangles = retained_triangles[keep_indices]
+            owner_ids = owner_ids[keep_indices]
+            tile_x = tile_x[keep_indices]
+            tile_y = tile_y[keep_indices]
+        _snapshot_surface_build_memory(build_memory_megabytes, "duplicate_audit")
 
-        edge_a = retained_triangles[:, (0, 1, 2)].reshape(-1)
-        edge_b = retained_triangles[:, (1, 2, 0)].reshape(-1)
-        edges = np.stack((np.minimum(edge_a, edge_b), np.maximum(edge_a, edge_b)), axis=1)
-        edge_owner_ids = np.repeat(owner_ids, 3)
-        unique_edges, edge_inverse, edge_counts = np.unique(edges, axis=0, return_inverse=True, return_counts=True)
-        nonmanifold_edge_count = int(np.count_nonzero(edge_counts > 2))
+        with _optional_surface_build_timer(build_timings_seconds, "owner_partition"):
+            tile_triangles_by_owner: Dict[Tuple[int, int], object] = {}
+            boundary_counts_by_owner_id: Dict[int, int] = {}
+            owner_order = np.argsort(owner_ids, kind="stable")
+            sorted_owner_ids = owner_ids[owner_order]
+            if len(sorted_owner_ids) > 0:
+                split_indices = np.flatnonzero(sorted_owner_ids[1:] != sorted_owner_ids[:-1]) + 1
+                starts = np.concatenate(([0], split_indices))
+                ends = np.concatenate((split_indices, [len(sorted_owner_ids)]))
+                for start, end in zip(starts, ends):
+                    original_first = int(owner_order[start])
+                    owner = (int(tile_x[original_first]), int(tile_y[original_first]))
+                    owner_triangles = TinOwnerTriangleRange(retained_triangles, owner_order, int(start), int(end))
+                    tile_triangles_by_owner[owner] = owner_triangles
+                    boundary_counts_by_owner_id[int(sorted_owner_ids[start])] = _boundary_edge_count_for_triangle_indices(owner_triangles.to_numpy())
+        _snapshot_surface_build_memory(build_memory_megabytes, "owner_partition")
 
-        order = np.lexsort((edge_owner_ids, edge_inverse))
-        sorted_edge_inverse = edge_inverse[order]
-        sorted_edge_owner_ids = edge_owner_ids[order]
-        unique_edge_owner_pairs = np.ones(len(order), dtype=bool)
-        unique_edge_owner_pairs[1:] = (
-            (sorted_edge_inverse[1:] != sorted_edge_inverse[:-1])
-            | (sorted_edge_owner_ids[1:] != sorted_edge_owner_ids[:-1])
-        )
-        owner_count_by_edge = np.bincount(
-            sorted_edge_inverse[unique_edge_owner_pairs],
-            minlength=len(unique_edges),
-        )
-        boundary_edge_mask = (edge_counts[edge_inverse] == 1) | (owner_count_by_edge[edge_inverse] > 1)
-        boundary_owner_ids, boundary_counts = np.unique(edge_owner_ids[boundary_edge_mask], return_counts=True)
-        boundary_counts_by_owner_id = {
-            int(owner_id): int(count)
-            for owner_id, count in zip(boundary_owner_ids, boundary_counts)
-        }
+        with _optional_surface_build_timer(build_timings_seconds, "edge_audit"):
+            nonmanifold_edge_count = _nonmanifold_edge_count_for_triangle_indices(
+                retained_triangles,
+                chunk_triangle_count=audit_plan.chunk_triangle_count,
+                chunk_storage=audit_chunk_storage,
+            )
+        _snapshot_surface_build_memory(build_memory_megabytes, "edge_audit")
         boundary_loop_counts_by_owner_id: Dict[int, int] = {}
 
         diagnostics.retained_triangle_count = int(len(retained_triangles))
@@ -3496,7 +4107,6 @@ def _build_global_tin_array_tile_data(
         diagnostics.boundary_loop_count = 0
 
         audit_errors: List[str] = []
-        ownerless_triangle_count = int(np.count_nonzero(ownerless_mask))
         if duplicate_triangle_count:
             audit_errors.append(f"duplicate owned triangles={duplicate_triangle_count}")
         if ownerless_triangle_count:
@@ -3517,13 +4127,28 @@ def _build_global_tin_array_tile_data(
     )
 
 
-def _resolve_surface_build_worker_count(requested_workers: int, tile_count: int) -> int:
+def _resolve_surface_build_worker_count(
+    requested_workers: int,
+    tile_count: int,
+    memory_estimate_megabytes: float = 0.0,
+    max_tile_triangle_count: int = 0,
+) -> int:
     if tile_count <= 1:
         return 1
     if requested_workers > 0:
         return min(requested_workers, tile_count)
     cpu_count = os.cpu_count() or 1
-    return max(1, min(cpu_count, 8, tile_count))
+    worker_cap = 8
+    total_memory = _total_physical_memory_megabytes()
+    if total_memory > 0.0 and memory_estimate_megabytes > total_memory * 0.35:
+        worker_cap = 2
+    if total_memory > 0.0 and memory_estimate_megabytes > total_memory * 0.55:
+        worker_cap = 1
+    if max_tile_triangle_count >= 250_000:
+        worker_cap = min(worker_cap, 4)
+    if max_tile_triangle_count >= 500_000:
+        worker_cap = min(worker_cap, 2)
+    return max(1, min(cpu_count, worker_cap, tile_count))
 
 
 def _write_global_tin_owner_tile(
@@ -3576,9 +4201,18 @@ def _write_global_tin_binary_surface_tiles(
     requested_workers: int,
     progress_path: Optional[Path],
     timings: Dict[str, float],
+    memory_snapshots: Optional[Dict[str, Dict[str, float]]] = None,
+    memory_estimate_megabytes: float = 0.0,
 ) -> List[SurfaceTileRecord]:
     total_owner_tiles = max(len(sorted_owner_tiles), 1)
-    worker_count = _resolve_surface_build_worker_count(requested_workers, len(sorted_owner_tiles))
+    max_tile_triangle_count = max((len(candidate_triangles) for _owner, candidate_triangles in sorted_owner_tiles), default=0)
+    worker_count = _resolve_surface_build_worker_count(
+        requested_workers,
+        len(sorted_owner_tiles),
+        memory_estimate_megabytes,
+        max_tile_triangle_count,
+    )
+    peak_memory = _snapshot_surface_build_memory(memory_snapshots, "tile_writing_start")
     write_surface_build_progress(
         progress_path,
         0.72,
@@ -3587,6 +4221,9 @@ def _write_global_tin_binary_surface_tiles(
         0,
         total_owner_tiles,
         timings,
+        memory_snapshots,
+        peak_memory,
+        memory_estimate_megabytes,
     )
     tile_results: Dict[Tuple[int, int], SurfaceTileRecord] = {}
     completed_count = 0
@@ -3607,6 +4244,9 @@ def _write_global_tin_binary_surface_tiles(
             completed_count,
             total_owner_tiles,
             timings,
+            memory_snapshots,
+            _snapshot_surface_build_memory(memory_snapshots, "tile_writing_progress"),
+            memory_estimate_megabytes,
         )
 
     if worker_count <= 1:
@@ -3638,6 +4278,7 @@ def _write_global_tin_binary_surface_tiles(
                 owner, tile = future.result()
                 record_result(owner, tile)
 
+    _snapshot_surface_build_memory(memory_snapshots, "tile_writing")
     return [tile_results[owner] for owner, _candidate_triangles in sorted_owner_tiles if owner in tile_results]
 
 
@@ -3714,12 +4355,31 @@ def _write_surface_manifest_with_timings(
     manifest_path: Path,
     timings: Dict[str, float],
     build_started_at: float,
+    memory_snapshots: Optional[Dict[str, Dict[str, float]]] = None,
+    memory_estimate_megabytes: float = 0.0,
+    memory_limited_stage: str = "",
+    audit_telemetry: Optional[Dict[str, float]] = None,
 ) -> None:
     manifest.build_timings_seconds = dict(sorted(timings.items()))
+    if memory_snapshots is not None:
+        _snapshot_surface_build_memory(memory_snapshots, "manifest_save_start")
+        manifest.build_memory_megabytes = dict(sorted(memory_snapshots.items()))
+        manifest.peak_memory_megabytes = max((item.get("peak", 0.0) for item in memory_snapshots.values()), default=0.0)
+    manifest.memory_estimate_megabytes = round(float(memory_estimate_megabytes), 3) if memory_estimate_megabytes > 0.0 else 0.0
+    manifest.memory_limited_stage = memory_limited_stage
+    if audit_telemetry:
+        manifest.audit_memory_mode = str(audit_telemetry.get("audit_memory_mode", manifest.audit_memory_mode))
+        manifest.audit_estimate_megabytes = round(float(audit_telemetry.get("audit_estimate_megabytes", 0.0)), 3)
+        manifest.audit_memory_budget_megabytes = round(float(audit_telemetry.get("audit_memory_budget_megabytes", 0.0)), 3)
+        manifest.physical_memory_megabytes = round(float(audit_telemetry.get("physical_memory_megabytes", 0.0)), 3)
     with _surface_build_timer(timings, "manifest_save"):
         manifest_path.write_text(json.dumps(asdict(manifest), indent=2), encoding="utf-8")
     timings["total"] = time.perf_counter() - build_started_at
     manifest.build_timings_seconds = dict(sorted(timings.items()))
+    if memory_snapshots is not None:
+        _snapshot_surface_build_memory(memory_snapshots, "manifest_save")
+        manifest.build_memory_megabytes = dict(sorted(memory_snapshots.items()))
+        manifest.peak_memory_megabytes = max((item.get("peak", 0.0) for item in memory_snapshots.values()), default=0.0)
     manifest_path.write_text(json.dumps(asdict(manifest), indent=2), encoding="utf-8")
 
 
@@ -3730,19 +4390,48 @@ def build_surface_cache(
     force_rebuild: bool = False,
     progress_path: Optional[Path] = None,
     surface_build_workers: int = 0,
+    surface_audit_mode: str = "auto",
+    surface_audit_memory_fraction: float = 0.45,
 ) -> DerivedSurfaceManifest:
     build_started_at = time.perf_counter()
     build_timings_seconds: Dict[str, float] = {}
+    build_memory_megabytes: Dict[str, Dict[str, float]] = {}
+    memory_estimate_megabytes = 0.0
+    memory_limited_stage = ""
+    audit_telemetry: Dict[str, float] = {}
+
+    def peak_memory() -> float:
+        return max((item.get("peak", 0.0) for item in build_memory_megabytes.values()), default=0.0)
+
     source = next((item for item in project.point_clouds if item.source_id == source_id), None)
     if source is None:
         raise ValueError(f"Point cloud {source_id} was not found.")
 
-    write_surface_build_progress(progress_path, 0.02, "Preparing", "Preparing surface build.", build_timings_seconds=build_timings_seconds)
+    _snapshot_surface_build_memory(build_memory_megabytes, "preparing")
+    write_surface_build_progress(
+        progress_path,
+        0.02,
+        "Preparing",
+        "Preparing surface build.",
+        build_timings_seconds=build_timings_seconds,
+        build_memory_megabytes=build_memory_megabytes,
+        peak_memory_megabytes=peak_memory(),
+    )
     manifest_path = build_default_surface_manifest_path(cache_dir, source.source_id)
     if manifest_path.exists() and not force_rebuild:
         manifest = derived_surface_from_dict(json.loads(manifest_path.read_text(encoding="utf-8")))
         if manifest.schema_version == SURFACE_MANIFEST_SCHEMA_VERSION:
-            write_surface_build_progress(progress_path, 1.0, "Ready", "Existing surface manifest is current.", 1, 1, build_timings_seconds)
+            write_surface_build_progress(
+                progress_path,
+                1.0,
+                "Ready",
+                "Existing surface manifest is current.",
+                1,
+                1,
+                build_timings_seconds,
+                build_memory_megabytes,
+                peak_memory(),
+            )
             return manifest
 
     surface_dir = manifest_path.parent
@@ -3752,15 +4441,36 @@ def build_surface_cache(
         shutil.rmtree(tiles_dir)
     ground_path = surface_dir / "ground.las"
     pipeline_path = surface_dir / "ground_pipeline.json"
-    write_surface_build_progress(progress_path, 0.08, "Classifying Ground", "Classifying ground points with PDAL.", build_timings_seconds=build_timings_seconds)
-    with _surface_build_timer(build_timings_seconds, "pdal_ground_classification"):
-        pipeline, ground_source = _build_ground_pipeline(source, ground_path, project.surface_settings.ground_classification_method)
+    write_surface_build_progress(
+        progress_path,
+        0.08,
+        "Classifying Ground",
+        "Classifying ground points with PDAL.",
+        build_timings_seconds=build_timings_seconds,
+        build_memory_megabytes=build_memory_megabytes,
+        peak_memory_megabytes=peak_memory(),
+    )
+
+    def run_ground_pipeline(pipeline: list, timer_name: str) -> None:
         pipeline_path.write_text(json.dumps(pipeline, indent=2), encoding="utf-8")
         try:
-            subprocess.run([find_pdal_executable(), "pipeline", str(pipeline_path)], check=True)
+            with _surface_build_timer(build_timings_seconds, timer_name):
+                subprocess.run([find_pdal_executable(), "pipeline", str(pipeline_path)], check=True)
         finally:
             if pipeline_path.exists():
                 pipeline_path.unlink()
+
+    def read_ground_points():
+        with _surface_build_timer(build_timings_seconds, "ground_las_read"):
+            try:
+                return _read_las_xyz_array(ground_path), True
+            except Exception:
+                return _read_las_xyz_points(ground_path), False
+
+    with _surface_build_timer(build_timings_seconds, "pdal_ground_classification"):
+        run_ground_pipeline(_build_existing_ground_pipeline(source, ground_path), "pdal_pipeline")
+        ground_source = "existingClassificationFast"
+    _snapshot_surface_build_memory(build_memory_megabytes, "pdal_ground_classification")
 
     write_surface_build_progress(
         progress_path,
@@ -3768,11 +4478,35 @@ def build_surface_cache(
         "Reading Ground",
         _timed_progress_message("Reading ground-classified points.", build_timings_seconds, "pdal_ground_classification"),
         build_timings_seconds=build_timings_seconds,
+        build_memory_megabytes=build_memory_megabytes,
+        peak_memory_megabytes=peak_memory(),
     )
-    with _surface_build_timer(build_timings_seconds, "las_read"):
-        ground_points = _read_las_xyz_points(ground_path)
-    if not ground_points:
-        raise ValueError("Ground-classified surface build returned no points.")
+    ground_points, ground_points_are_array = read_ground_points()
+    build_timings_seconds["las_read"] = build_timings_seconds.get("ground_las_read", 0.0)
+    _snapshot_surface_build_memory(build_memory_megabytes, "ground_las_read")
+    if len(ground_points) == 0:
+        write_surface_build_progress(
+            progress_path,
+            0.16,
+            "Classifying Ground",
+            "No existing ground classification found; running PDAL classifier.",
+            build_timings_seconds=build_timings_seconds,
+            build_memory_megabytes=build_memory_megabytes,
+            peak_memory_megabytes=peak_memory(),
+        )
+        with _surface_build_timer(build_timings_seconds, "pdal_ground_classification_fallback"):
+            pipeline, ground_source = _build_ground_pipeline(
+                source,
+                ground_path,
+                project.surface_settings.ground_classification_method,
+                build_timings_seconds,
+            )
+            run_ground_pipeline(pipeline, "pdal_pipeline_fallback")
+        ground_points, ground_points_are_array = read_ground_points()
+        build_timings_seconds["las_read"] = build_timings_seconds.get("ground_las_read", 0.0)
+        _snapshot_surface_build_memory(build_memory_megabytes, "ground_las_read")
+        if len(ground_points) == 0:
+            raise ValueError("Ground-classified surface build returned no points.")
 
     min_x, min_y, min_z = source.bounds_min
     max_x, max_y, max_z = source.bounds_max
@@ -3789,31 +4523,68 @@ def build_surface_cache(
 
     max_tile_x = max(0, int(math.ceil((max_x - min_x) / tile_size)) - 1)
     max_tile_y = max(0, int(math.ceil((max_y - min_y) / tile_size)) - 1)
-    with _surface_build_timer(build_timings_seconds, "dedupe"):
-        unique_ground_points = _dedupe_xy_points(ground_points)
+    with _surface_build_timer(build_timings_seconds, "array_dedupe" if ground_points_are_array else "dedupe"):
+        unique_ground_points = _dedupe_xy_points_numpy(ground_points) if ground_points_are_array else _dedupe_xy_points(ground_points)
+    del ground_points
+    if ground_points_are_array:
+        build_timings_seconds["dedupe"] = build_timings_seconds.get("array_dedupe", 0.0)
+    _snapshot_surface_build_memory(build_memory_megabytes, "array_dedupe" if ground_points_are_array else "dedupe")
+    unique_ground_point_count = len(unique_ground_points)
+    memory_estimate_megabytes = _estimate_global_tin_memory_megabytes(unique_ground_point_count)
     write_surface_build_progress(
         progress_path,
         0.32,
         "Preparing TIN",
-        _timed_progress_message(f"Preparing {len(unique_ground_points)} unique ground points for TIN generation.", build_timings_seconds, "dedupe"),
-        len(unique_ground_points),
-        len(unique_ground_points),
+        _timed_progress_message(f"Preparing {unique_ground_point_count} unique ground points for TIN generation.", build_timings_seconds, "dedupe"),
+        unique_ground_point_count,
+        unique_ground_point_count,
         build_timings_seconds,
+        build_memory_megabytes,
+        peak_memory(),
+        memory_estimate_megabytes,
     )
-    if len(unique_ground_points) > global_tin_max_points:
+    total_memory_megabytes = _total_physical_memory_megabytes()
+    if total_memory_megabytes > 0.0 and memory_estimate_megabytes > total_memory_megabytes * 0.82:
+        memory_limited_stage = "preflight"
+        write_surface_build_progress(
+            progress_path,
+            0.32,
+            "Memory Limited",
+            (
+                f"Estimated full-resolution global TIN build memory is {memory_estimate_megabytes:.0f} MB, "
+                f"which is too close to this machine's {total_memory_megabytes:.0f} MB physical RAM."
+            ),
+            unique_ground_point_count,
+            unique_ground_point_count,
+            build_timings_seconds,
+            build_memory_megabytes,
+            peak_memory(),
+            memory_estimate_megabytes,
+            memory_limited_stage,
+        )
         raise ValueError(
-            f"GlobalDelaunayTIN requires {len(unique_ground_points)} unique ground points, "
-            f"which exceeds GlobalTinMaxPoints={global_tin_max_points}. Increase the cap or use a smaller source."
+            f"GlobalDelaunayTIN memory preflight estimated {memory_estimate_megabytes:.0f} MB for "
+            f"{unique_ground_point_count} unique ground points, which is too close to the available "
+            f"{total_memory_megabytes:.0f} MB physical RAM. Increase RAM, reduce the source extent, or wait for partitioned TIN."
+        )
+    if unique_ground_point_count > global_tin_max_points:
+        raise ValueError(
+            f"GlobalDelaunayTIN requires {unique_ground_point_count} unique ground points, "
+            f"which exceeds GlobalTinMaxPoints={global_tin_max_points}. Estimated build memory is "
+            f"{memory_estimate_megabytes:.0f} MB. Increase the cap or use a smaller source."
         )
 
     write_surface_build_progress(
         progress_path,
         0.38,
         "Generating TIN",
-        _timed_progress_message(f"Generating global Delaunay TIN from {len(unique_ground_points)} ground points.", build_timings_seconds, "las_read"),
+        _timed_progress_message(f"Generating global Delaunay TIN from {unique_ground_point_count} ground points.", build_timings_seconds, "las_read"),
         0,
-        len(unique_ground_points),
+        unique_ground_point_count,
         build_timings_seconds,
+        build_memory_megabytes,
+        peak_memory(),
+        memory_estimate_megabytes,
     )
     global_vertices_xyz, candidate_triangles_by_owner, boundary_counts_by_owner_id, aggregate_diagnostics, topology_audit_status, topology_audit_message = _build_global_tin_array_tile_data(
         unique_ground_points,
@@ -3830,7 +4601,13 @@ def build_surface_cache(
         max_triangle_z_delta=max_triangle_z_delta,
         points_are_unique=True,
         build_timings_seconds=build_timings_seconds,
+        build_memory_megabytes=build_memory_megabytes,
+        audit_memory_mode=surface_audit_mode,
+        audit_memory_fraction=surface_audit_memory_fraction,
+        audit_telemetry=audit_telemetry,
     )
+    del unique_ground_points
+    _snapshot_surface_build_memory(build_memory_megabytes, "tin_ownership_audit")
 
     sorted_owner_tiles = sorted(candidate_triangles_by_owner.items())
     with _surface_build_timer(build_timings_seconds, "tile_writing"):
@@ -3844,7 +4621,10 @@ def build_surface_cache(
             surface_build_workers,
             progress_path,
             build_timings_seconds,
+            build_memory_megabytes,
+            memory_estimate_megabytes,
         )
+    _snapshot_surface_build_memory(build_memory_megabytes, "tile_writing")
 
     if not tiles:
         raise ValueError("Ground-classified global TIN surface build produced no valid triangles.")
@@ -3855,6 +4635,13 @@ def build_surface_cache(
         "Auditing",
         _timed_progress_message("Auditing TIN topology and tile boundaries.", build_timings_seconds, "tin_ownership_audit"),
         build_timings_seconds=build_timings_seconds,
+        build_memory_megabytes=build_memory_megabytes,
+        peak_memory_megabytes=peak_memory(),
+        memory_estimate_megabytes=memory_estimate_megabytes,
+        audit_memory_mode=str(audit_telemetry.get("audit_memory_mode", "")),
+        audit_estimate_megabytes=float(audit_telemetry.get("audit_estimate_megabytes", 0.0) or 0.0),
+        audit_memory_budget_megabytes=float(audit_telemetry.get("audit_memory_budget_megabytes", 0.0) or 0.0),
+        physical_memory_megabytes=float(audit_telemetry.get("physical_memory_megabytes", 0.0) or 0.0),
     )
     seam_audit_status = topology_audit_status
     seam_audit_message = topology_audit_message
@@ -3888,7 +4675,7 @@ def build_surface_cache(
             tin_boundary_edge_count=aggregate_diagnostics.boundary_edge_count,
             tin_boundary_loop_count=aggregate_diagnostics.boundary_loop_count,
             tin_constrained_triangulation_status=aggregate_diagnostics.constrained_triangulation_status,
-            global_point_count=len(unique_ground_points),
+            global_point_count=unique_ground_point_count,
             global_retained_triangle_count=aggregate_diagnostics.retained_triangle_count,
             global_rejected_triangle_count=aggregate_diagnostics.rejected_large_triangle_count + aggregate_diagnostics.rejected_z_delta_count + aggregate_diagnostics.rejected_bounds_count,
             topology_audit_status=topology_audit_status,
@@ -3897,10 +4684,32 @@ def build_surface_cache(
             seam_audit_status=seam_audit_status,
             seam_audit_message=seam_audit_message,
         )
-        _write_surface_manifest_with_timings(manifest, manifest_path, build_timings_seconds, build_started_at)
+        _write_surface_manifest_with_timings(
+            manifest,
+            manifest_path,
+            build_timings_seconds,
+            build_started_at,
+            build_memory_megabytes,
+            memory_estimate_megabytes,
+            memory_limited_stage,
+            audit_telemetry,
+        )
         raise ValueError(topology_audit_message)
 
-    write_surface_build_progress(progress_path, 0.98, "Saving", "Saving derived surface manifest.", build_timings_seconds=build_timings_seconds)
+    write_surface_build_progress(
+        progress_path,
+        0.98,
+        "Saving",
+        "Saving derived surface manifest.",
+        build_timings_seconds=build_timings_seconds,
+        build_memory_megabytes=build_memory_megabytes,
+        peak_memory_megabytes=peak_memory(),
+        memory_estimate_megabytes=memory_estimate_megabytes,
+        audit_memory_mode=str(audit_telemetry.get("audit_memory_mode", "")),
+        audit_estimate_megabytes=float(audit_telemetry.get("audit_estimate_megabytes", 0.0) or 0.0),
+        audit_memory_budget_megabytes=float(audit_telemetry.get("audit_memory_budget_megabytes", 0.0) or 0.0),
+        physical_memory_megabytes=float(audit_telemetry.get("physical_memory_megabytes", 0.0) or 0.0),
+    )
     manifest = DerivedSurfaceManifest(
         surface_id=source.surface_id or str(uuid.uuid4()),
         source_cloud_id=source.source_id,
@@ -3930,7 +4739,7 @@ def build_surface_cache(
         tin_boundary_edge_count=aggregate_diagnostics.boundary_edge_count,
         tin_boundary_loop_count=aggregate_diagnostics.boundary_loop_count,
         tin_constrained_triangulation_status=aggregate_diagnostics.constrained_triangulation_status,
-        global_point_count=len(unique_ground_points),
+        global_point_count=unique_ground_point_count,
         global_retained_triangle_count=aggregate_diagnostics.retained_triangle_count,
         global_rejected_triangle_count=aggregate_diagnostics.rejected_large_triangle_count + aggregate_diagnostics.rejected_z_delta_count + aggregate_diagnostics.rejected_bounds_count,
         topology_audit_status=topology_audit_status,
@@ -3939,7 +4748,16 @@ def build_surface_cache(
         seam_audit_status=seam_audit_status,
         seam_audit_message=seam_audit_message,
     )
-    _write_surface_manifest_with_timings(manifest, manifest_path, build_timings_seconds, build_started_at)
+    _write_surface_manifest_with_timings(
+        manifest,
+        manifest_path,
+        build_timings_seconds,
+        build_started_at,
+        build_memory_megabytes,
+        memory_estimate_megabytes,
+        memory_limited_stage,
+        audit_telemetry,
+    )
 
     source.surface_id = manifest.surface_id
     source.surface_manifest_path = str(manifest_path)
@@ -3953,7 +4771,22 @@ def build_surface_cache(
 
     project.derived_surfaces = [item for item in project.derived_surfaces if item.source_cloud_id != source.source_id]
     project.derived_surfaces.append(manifest)
-    write_surface_build_progress(progress_path, 1.0, "Ready", source.surface_status, len(tiles), len(tiles), build_timings_seconds)
+    write_surface_build_progress(
+        progress_path,
+        1.0,
+        "Ready",
+        source.surface_status,
+        len(tiles),
+        len(tiles),
+        build_timings_seconds,
+        build_memory_megabytes,
+        peak_memory(),
+        memory_estimate_megabytes,
+        audit_memory_mode=str(audit_telemetry.get("audit_memory_mode", "")),
+        audit_estimate_megabytes=float(audit_telemetry.get("audit_estimate_megabytes", 0.0) or 0.0),
+        audit_memory_budget_megabytes=float(audit_telemetry.get("audit_memory_budget_megabytes", 0.0) or 0.0),
+        physical_memory_megabytes=float(audit_telemetry.get("physical_memory_megabytes", 0.0) or 0.0),
+    )
     return manifest
 
 

@@ -31,16 +31,30 @@ from scripts.cstopo_core import (
     _build_surface_tile,
     _build_tin_surface_tile,
     _audit_tin_seams,
+    _boundary_edge_count_for_triangle_indices,
+    _build_global_tin_array_tile_data,
     _build_global_tin_tile_data,
     _build_supported_tin_triangles,
     _decimate_tin_points,
+    _dedupe_xy_points,
+    _dedupe_xy_points_numpy,
     _edge_lengths_xy,
     _extract_tin_boundary_edges,
+    _estimate_global_tin_memory_megabytes,
+    _filter_tin_triangle_indices_numpy,
     _filter_tin_triangles_numpy,
     _filter_tin_triangles_python,
+    _nonmanifold_edge_count_for_triangle_indices,
+    _packed_undirected_edge_keys,
+    _packed_xy_keys_from_array,
+    _plan_tin_audit_memory,
     _point_key,
     _read_las_xyz_points_numpy,
     _read_las_xyz_points_python,
+    _read_las_xyz_array_numpy,
+    _structured_triangle_keys,
+    _unique_triangle_first_indices_and_duplicate_count,
+    _resolve_surface_build_worker_count,
     _read_cstin_binary_tile,
     _write_cstin_binary_tile,
     _write_global_tin_surface_tiles,
@@ -571,9 +585,21 @@ class CSTopoCoreTests(unittest.TestCase):
             self.assertIn("build_timings_seconds", progress)
             self.assertIn("las_read", progress["build_timings_seconds"])
             self.assertIn("tile_writing", progress["build_timings_seconds"])
+            self.assertIn("build_memory_megabytes", progress)
+            self.assertIn("peak_memory_megabytes", progress)
+            self.assertIn("memory_estimate_megabytes", progress)
+            self.assertIn("audit_memory_mode", progress)
+            self.assertIn("audit_estimate_megabytes", progress)
+            self.assertIn("audit_memory_budget_megabytes", progress)
             surface_manifest = json.loads(Path(project.derived_surfaces[0].manifest_path).read_text(encoding="utf-8"))
             self.assertIn("build_timings_seconds", surface_manifest)
-            self.assertEqual(surface_manifest["schema_version"], "5.1")
+            self.assertIn("build_memory_megabytes", surface_manifest)
+            self.assertIn("peak_memory_megabytes", surface_manifest)
+            self.assertIn("memory_estimate_megabytes", surface_manifest)
+            self.assertIn("audit_memory_mode", surface_manifest)
+            self.assertIn("audit_estimate_megabytes", surface_manifest)
+            self.assertIn("audit_memory_budget_megabytes", surface_manifest)
+            self.assertEqual(surface_manifest["schema_version"], SURFACE_MANIFEST_SCHEMA_VERSION)
             self.assertTrue(all(tile["mesh_format"] == "CSTopoBinaryTIN1" for tile in surface_manifest["tiles"]))
             self.assertTrue(all(tile["mesh_path"].endswith(".cstin") for tile in surface_manifest["tiles"]))
 
@@ -895,6 +921,242 @@ class CSTopoCoreTests(unittest.TestCase):
         self.assertEqual(len(triangle_keys), len(set(triangle_keys)))
         self.assertEqual(diagnostics.retained_triangle_count, len(triangle_keys))
 
+    def test_array_global_tin_audit_matches_tuple_partition(self):
+        points = [
+            (float(x), float(y), 20.0 + x * 0.03 + y * 0.02)
+            for x in range(0, 16)
+            for y in range(0, 8)
+        ]
+
+        tuple_triangles_by_owner, tuple_boundary_edges_by_owner, tuple_diagnostics, tuple_status, tuple_message = _build_global_tin_tile_data(
+            points,
+            0.0,
+            0.0,
+            15.0,
+            7.0,
+            5.0,
+            2,
+            1,
+            configured_edge_length=3.0,
+            edge_multiplier=8.0,
+            area_multiplier=0.75,
+            max_triangle_z_delta=None,
+        )
+        vertices_xyz, array_triangles_by_owner, array_boundary_counts, array_diagnostics, array_status, array_message = _build_global_tin_array_tile_data(
+            points,
+            0.0,
+            0.0,
+            15.0,
+            7.0,
+            5.0,
+            2,
+            1,
+            configured_edge_length=3.0,
+            edge_multiplier=8.0,
+            area_multiplier=0.75,
+            max_triangle_z_delta=None,
+        )
+
+        self.assertEqual(array_status, tuple_status, array_message or tuple_message)
+        self.assertEqual(array_diagnostics.retained_triangle_count, tuple_diagnostics.retained_triangle_count)
+        self.assertEqual(array_diagnostics.rejected_large_triangle_count, tuple_diagnostics.rejected_large_triangle_count)
+        self.assertEqual(array_diagnostics.rejected_bounds_count, tuple_diagnostics.rejected_bounds_count)
+        self.assertEqual(array_diagnostics.rejected_z_delta_count, tuple_diagnostics.rejected_z_delta_count)
+        self.assertEqual(set(array_triangles_by_owner), set(tuple_triangles_by_owner))
+        for owner, tuple_triangles in tuple_triangles_by_owner.items():
+            array_triangles = array_triangles_by_owner[owner]
+            self.assertEqual(len(array_triangles), len(tuple_triangles))
+            array_keys = {
+                tuple(sorted(tuple(round(float(value), 6) for value in vertices_xyz[index]) for index in triangle))
+                for triangle in array_triangles
+            }
+            tuple_keys = {
+                tuple(sorted(tuple(round(float(value), 6) for value in point) for point in triangle))
+                for triangle in tuple_triangles
+            }
+            self.assertEqual(array_keys, tuple_keys)
+            owner_id = (owner[0] * (1 + 1)) + owner[1]
+            self.assertEqual(array_boundary_counts.get(owner_id, 0), len(tuple_boundary_edges_by_owner.get(owner, [])))
+
+    def test_packed_array_audit_detects_duplicate_and_nonmanifold_edges(self):
+        import numpy as np
+
+        triangle_indices = np.array(
+            [
+                [0, 1, 2],
+                [2, 1, 0],
+                [0, 1, 3],
+                [1, 0, 4],
+            ],
+            dtype=np.uint32,
+        )
+
+        _unique_triangle_keys, triangle_key_counts = np.unique(
+            _structured_triangle_keys(triangle_indices),
+            return_counts=True,
+        )
+        self.assertEqual(int(np.sum(triangle_key_counts - 1)), 1)
+        first_indices, duplicate_count = _unique_triangle_first_indices_and_duplicate_count(triangle_indices)
+        self.assertEqual(duplicate_count, 1)
+        self.assertEqual(sorted(int(index) for index in first_indices), [0, 2, 3])
+        chunked_first_indices, chunked_duplicate_count = _unique_triangle_first_indices_and_duplicate_count(
+            triangle_indices,
+            chunk_triangle_count=2,
+        )
+        self.assertEqual(chunked_duplicate_count, duplicate_count)
+        self.assertEqual(sorted(int(index) for index in chunked_first_indices), sorted(int(index) for index in first_indices))
+
+        edge_a = triangle_indices[:, (0, 1, 2)].reshape(-1)
+        edge_b = triangle_indices[:, (1, 2, 0)].reshape(-1)
+        _unique_edges, edge_counts = np.unique(_packed_undirected_edge_keys(edge_a, edge_b), return_counts=True)
+        self.assertEqual(int(np.count_nonzero(edge_counts > 2)), 1)
+        self.assertEqual(_nonmanifold_edge_count_for_triangle_indices(triangle_indices, chunk_triangle_count=2), 1)
+        memory_first_indices, memory_duplicate_count = _unique_triangle_first_indices_and_duplicate_count(
+            triangle_indices,
+            chunk_triangle_count=2,
+            chunk_storage="memory",
+        )
+        self.assertEqual(memory_duplicate_count, duplicate_count)
+        self.assertEqual(sorted(int(index) for index in memory_first_indices), sorted(int(index) for index in first_indices))
+        self.assertEqual(
+            _nonmanifold_edge_count_for_triangle_indices(triangle_indices, chunk_triangle_count=2, chunk_storage="memory"),
+            1,
+        )
+
+    def test_tin_audit_memory_planner_adapts_to_ram_and_overrides(self):
+        silicon_ranch_triangle_count = 9_191_625
+
+        self.assertEqual(
+            _plan_tin_audit_memory(
+                silicon_ranch_triangle_count,
+                physical_memory_megabytes=16_384.0,
+                current_memory_megabytes=1_500.0,
+            ).mode,
+            "inMemory",
+        )
+        self.assertEqual(
+            _plan_tin_audit_memory(
+                25_000_000,
+                physical_memory_megabytes=16_384.0,
+                current_memory_megabytes=1_500.0,
+            ).mode,
+            "chunkedMemory",
+        )
+        self.assertEqual(
+            _plan_tin_audit_memory(
+                60_000_000,
+                physical_memory_megabytes=16_384.0,
+                current_memory_megabytes=1_500.0,
+            ).mode,
+            "chunkedDisk",
+        )
+        self.assertEqual(
+            _plan_tin_audit_memory(
+                60_000_000,
+                requested_mode="in-memory",
+                physical_memory_megabytes=16_384.0,
+                current_memory_megabytes=1_500.0,
+            ).mode,
+            "inMemory",
+        )
+        self.assertEqual(
+            _plan_tin_audit_memory(
+                silicon_ranch_triangle_count,
+                requested_mode="chunked-disk",
+                physical_memory_megabytes=131_072.0,
+                current_memory_megabytes=1_500.0,
+            ).mode,
+            "chunkedDisk",
+        )
+
+    def test_packed_xy_keys_are_used_when_coordinate_range_fits(self):
+        import numpy as np
+
+        points = np.asarray(
+            [
+                [108743.24, 69225.01, 1.0],
+                [108743.24, 69225.01, 2.0],
+                [111196.19, 70813.63, 3.0],
+            ],
+            dtype=np.float64,
+        )
+
+        keys = _packed_xy_keys_from_array(points)
+        self.assertIsNotNone(keys)
+        self.assertEqual(len(set(int(item) for item in keys)), 2)
+
+    def test_owner_boundary_count_ignores_internal_edges(self):
+        import numpy as np
+
+        owner_triangles = np.array(
+            [
+                [0, 1, 2],
+                [1, 3, 2],
+            ],
+            dtype=np.uint32,
+        )
+
+        self.assertEqual(_boundary_edge_count_for_triangle_indices(owner_triangles), 4)
+
+    def test_numpy_tin_index_filter_rejects_same_triangle_classes(self):
+        import numpy as np
+
+        vertices = np.asarray(
+            [
+                (0.0, 0.0, 10.0),
+                (1.0, 0.0, 10.1),
+                (0.0, 1.0, 10.2),
+                (20.0, 20.0, 10.0),
+                (21.0, 20.0, 10.0),
+                (20.0, 21.0, 10.0),
+                (10.0, 0.0, 10.0),
+                (0.0, 10.0, 10.0),
+                (2.0, 2.0, 10.0),
+                (3.0, 2.0, 20.0),
+                (2.0, 3.0, 10.0),
+            ],
+            dtype=np.float64,
+        )
+        triangles = np.asarray(
+            [
+                (0, 1, 2),
+                (3, 4, 5),
+                (0, 6, 7),
+                (8, 9, 10),
+            ],
+            dtype=np.uint32,
+        )
+
+        retained, diagnostics = _filter_tin_triangle_indices_numpy(
+            vertices,
+            triangles,
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            5.0,
+            1,
+            1,
+            5.0,
+            0.75,
+            5.0,
+        )
+
+        self.assertEqual(retained.tolist(), [[0, 1, 2]])
+        self.assertEqual(diagnostics.retained_triangle_count, 1)
+        self.assertEqual(diagnostics.rejected_bounds_count, 1)
+        self.assertEqual(diagnostics.rejected_large_triangle_count, 1)
+        self.assertEqual(diagnostics.rejected_z_delta_count, 1)
+
+    def test_memory_estimate_and_auto_workers_are_conservative_for_large_builds(self):
+        small_estimate = _estimate_global_tin_memory_megabytes(1_000)
+        large_estimate = _estimate_global_tin_memory_megabytes(8_000_000)
+
+        self.assertGreater(small_estimate, 0.0)
+        self.assertGreater(large_estimate, small_estimate)
+        self.assertEqual(_resolve_surface_build_worker_count(0, 12, 0.0, 600_000), 2)
+        self.assertEqual(_resolve_surface_build_worker_count(1, 12, large_estimate, 600_000), 1)
+
     def test_numpy_tin_filter_matches_python_filter(self):
         raw_triangles = [
             ((0.0, 0.0, 10.0), (1.0, 0.0, 10.1), (0.0, 1.0, 10.2)),
@@ -946,10 +1208,27 @@ class CSTopoCoreTests(unittest.TestCase):
             header = read_las_header(source)
             try:
                 numpy_points = _read_las_xyz_points_numpy(source, header)
+                numpy_array = _read_las_xyz_array_numpy(source, header)
             except RuntimeError as exc:
                 self.skipTest(str(exc))
 
             self.assertEqual(numpy_points, _read_las_xyz_points_python(source, header))
+            self.assertEqual(numpy_points, [tuple(row) for row in numpy_array.tolist()])
+
+    def test_numpy_xy_dedupe_matches_legacy_order_and_average_z(self):
+        import numpy as np
+
+        points = [
+            (100.004, 200.004, 10.0),
+            (100.004, 200.004, 12.0),
+            (101.0, 200.0, 20.0),
+            (100.006, 200.006, 30.0),
+            (101.0, 200.0, 22.0),
+        ]
+
+        numpy_deduped = _dedupe_xy_points_numpy(np.asarray(points, dtype=np.float64))
+        legacy_deduped = _dedupe_xy_points(points)
+        self.assertEqual([tuple(row) for row in numpy_deduped.tolist()], legacy_deduped)
 
     def test_parallel_global_tin_tile_writes_are_deterministic(self):
         with tempfile.TemporaryDirectory() as temp:

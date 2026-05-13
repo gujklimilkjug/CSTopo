@@ -154,6 +154,8 @@ def cmd_build_surface(args: argparse.Namespace) -> None:
             force_rebuild=args.force,
             progress_path=progress_path,
             surface_build_workers=args.surface_build_workers,
+            surface_audit_mode=args.surface_audit_mode,
+            surface_audit_memory_fraction=args.surface_audit_memory_fraction,
         )
     except Exception as exc:
         write_surface_build_progress(progress_path, 1.0, "Failed", f"Surface build failed: {exc}", 1, 1)
@@ -235,6 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
     build_surface.add_argument("--global-tin-max-points", type=int, help="maximum unique ground points accepted by GlobalDelaunayTIN")
     build_surface.add_argument("--surface-collision-mode", choices=["RuntimeVisibleStitchedTIN"], help="runtime collision strategy for derived surface tiles")
     build_surface.add_argument("--surface-build-workers", type=int, default=0, help="tile-writing worker count; 0 chooses a conservative automatic count")
+    build_surface.add_argument("--surface-audit-mode", choices=["auto", "in-memory", "chunked-disk"], default="auto", help="debug override for full topology audit memory strategy")
+    build_surface.add_argument("--surface-audit-memory-fraction", type=float, default=0.45, help="fraction of physical RAM the automatic audit planner may budget")
     build_surface.add_argument("--progress-path", help="optional JSON file updated with surface build progress")
     build_surface.add_argument("--force", action="store_true", help="rebuild surface even if a manifest already exists")
     build_surface.set_defaults(func=cmd_build_surface)

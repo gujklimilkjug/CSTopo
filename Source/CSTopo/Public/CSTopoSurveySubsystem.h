@@ -9,12 +9,16 @@
 struct FCSTopoLoadedSurfaceTile
 {
     FString TileId;
+    FString MeshPath;
+    FString MeshFormat;
     FVector BoundsMin = FVector::ZeroVector;
     FVector BoundsMax = FVector::ZeroVector;
     TArray<FVector> SourceVertices;
     TArray<int32> Triangles;
     TObjectPtr<class UProceduralMeshComponent> MeshComponent = nullptr;
     bool bRuntimeVisible = true;
+    bool bGeometryLoaded = false;
+    bool bTileLoadQueued = false;
     int32 BoundaryEdgeCount = 0;
     int32 BoundaryLoopCount = 0;
 };
@@ -28,6 +32,7 @@ struct FCSTopoLoadedSurface
     TArray<FCSTopoLoadedSurfaceTile> Tiles;
     TSet<FString> RuntimeVisibleTileIds;
     TSet<FString> CollisionProxyTileIds;
+    TArray<FString> PendingTileLoadIds;
     TObjectPtr<class UProceduralMeshComponent> CollisionProxyComponent = nullptr;
     FVector LastCollisionProxySourceLocation = FVector::ZeroVector;
     FVector LastVisibilitySourceLocation = FVector::ZeroVector;
@@ -308,6 +313,10 @@ private:
     bool QueryNearestDerivedSurfaceHeightAtSourceXY(const FCSTopoPointCloudSource& Source, double SourceX, double SourceY, double SearchRadiusSourceUnits, double& SurfaceZ, FString* OutTileId = nullptr) const;
     bool TraceTriangleFromView(const FVector& ViewOrigin, const FVector& ViewDirection, const FVector& A, const FVector& B, const FVector& C, double& OutDistance, FVector& OutHit) const;
     bool LoadTileGeometry(const FString& MeshPath, const FString& MeshFormat, FCSTopoLoadedSurfaceTile& Tile, FString& ErrorMessage) const;
+    bool EnsureSurfaceTileGeometryLoaded(const FCSTopoPointCloudSource& Source, FCSTopoLoadedSurfaceTile& Tile, FString& ErrorMessage);
+    bool EnsureSurfaceTileRenderMesh(FCSTopoPointCloudSource& Source, FCSTopoLoadedSurface& Surface, FCSTopoLoadedSurfaceTile& Tile, FString& ErrorMessage);
+    void QueueSurfaceTileLoad(FCSTopoLoadedSurface& Surface, FCSTopoLoadedSurfaceTile& Tile);
+    void ProcessPendingSurfaceTileLoads(FCSTopoPointCloudSource& Source, int32 MaxTiles, int64 MaxBytes);
     void RefreshSurfacePresentation(FCSTopoPointCloudSource& Source);
     void UpdateVisibleSurfaceTiles(FCSTopoPointCloudSource& Source, const FVector& SourceLocation, bool bForce);
     void RebuildSurfaceCollisionProxy(const FCSTopoPointCloudSource& Source, FCSTopoLoadedSurface& Surface, const FVector& SourceLocation, bool bForce);

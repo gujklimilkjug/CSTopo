@@ -182,7 +182,7 @@ struct FCSTopoSurfaceTileRecord
     FString MeshPath;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
-    FString MeshFormat = TEXT("JsonTIN");
+    FString MeshFormat = TEXT("CSTopoBinaryTIN1");
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FString Status = TEXT("Pending");
@@ -215,7 +215,7 @@ struct FCSTopoDerivedSurfaceManifest
     FString SourceCloudId;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
-    FString SchemaVersion = TEXT("5.1");
+    FString SchemaVersion = TEXT("6.0");
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     ECSTopoSurfaceBuildState BuildState = ECSTopoSurfaceBuildState::Pending;

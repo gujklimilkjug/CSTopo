@@ -30,14 +30,12 @@ namespace
 constexpr ECollisionChannel CSTopoSurfaceCollisionChannel = ECC_GameTraceChannel1;
 constexpr double CSTopoLineworkSampleToleranceSourceUnits = 0.1;
 
-const TCHAR* CurrentSurfaceManifestSchemaVersion = TEXT("5.1");
-const TCHAR* LegacySurfaceManifestSchemaVersion = TEXT("5.0");
-const TCHAR* SurfaceTileFormatJson = TEXT("JsonTIN");
+const TCHAR* CurrentSurfaceManifestSchemaVersion = TEXT("6.0");
 const TCHAR* SurfaceTileFormatBinary = TEXT("CSTopoBinaryTIN1");
 
 bool IsSupportedSurfaceManifestSchema(const FString& SchemaVersion)
 {
-    return SchemaVersion == CurrentSurfaceManifestSchemaVersion || SchemaVersion == LegacySurfaceManifestSchemaVersion;
+    return SchemaVersion == CurrentSurfaceManifestSchemaVersion;
 }
 
 int32 ReadInt32LE(const uint8* Bytes)
@@ -857,18 +855,31 @@ FString UCSTopoSurveySubsystem::GetCurrentProjectPath() const
 
 bool UCSTopoSurveySubsystem::LoadProject(const FString& FilePath, FString& ErrorMessage)
 {
+    const double LoadStartedAt = FPlatformTime::Seconds();
     const FString NormalizedFilePath = NormalizeCSTopoDialogPath(FilePath);
 
+    const double ProjectReadStartedAt = FPlatformTime::Seconds();
     const bool bLoaded = UCSTopoProjectLibrary::LoadProjectFromFile(NormalizedFilePath, ActiveProject, ErrorMessage);
+    const double ProjectReadSeconds = FPlatformTime::Seconds() - ProjectReadStartedAt;
     if (bLoaded)
     {
         DestroyUserTinPreview();
         CurrentProjectPath = NormalizedFilePath;
+        const double RefreshStartedAt = FPlatformTime::Seconds();
         RefreshPointCloudSourceStates();
         SyncActivePointCloudFlags();
         ClearPendingControlCode();
         RebuildFigureSegments();
+        const double RefreshSeconds = FPlatformTime::Seconds() - RefreshStartedAt;
+        const double ActorRebuildStartedAt = FPlatformTime::Seconds();
         RebuildLoadedPointCloudActors();
+        const double ActorRebuildSeconds = FPlatformTime::Seconds() - ActorRebuildStartedAt;
+        UE_LOG(LogTemp, Log, TEXT("CSTopo project load timings: project_json=%.3fs refresh=%.3fs actors_and_surface=%.3fs total=%.3fs path=%s"),
+            ProjectReadSeconds,
+            RefreshSeconds,
+            ActorRebuildSeconds,
+            FPlatformTime::Seconds() - LoadStartedAt,
+            *NormalizedFilePath);
     }
     return bLoaded;
 }
@@ -1605,152 +1616,320 @@ bool UCSTopoSurveySubsystem::LoadTileGeometry(const FString& MeshPath, const FSt
 {
     const bool bBinaryTile = MeshFormat.Equals(SurfaceTileFormatBinary, ESearchCase::IgnoreCase)
         || FPaths::GetExtension(MeshPath).Equals(TEXT("cstin"), ESearchCase::IgnoreCase);
-    if (bBinaryTile)
+    if (!bBinaryTile)
     {
-        TArray<uint8> Bytes;
-        if (!FFileHelper::LoadFileToArray(Bytes, *MeshPath))
-        {
-            ErrorMessage = FString::Printf(TEXT("Failed to read binary surface tile: %s"), *MeshPath);
-            return false;
-        }
-
-        constexpr int32 HeaderSize = 8 + 4 + 4 + 4 + (6 * 8);
-        const uint8 ExpectedMagic[8] = { 'C', 'S', 'T', 'T', 'I', 'N', '1', '\0' };
-        if (Bytes.Num() < HeaderSize || FMemory::Memcmp(Bytes.GetData(), ExpectedMagic, 8) != 0)
-        {
-            ErrorMessage = FString::Printf(TEXT("Invalid binary surface tile header: %s"), *MeshPath);
-            return false;
-        }
-
-        const uint8* Cursor = Bytes.GetData() + 8;
-        const uint32 Version = ReadUInt32LE(Cursor);
-        Cursor += 4;
-        const uint32 VertexCount = ReadUInt32LE(Cursor);
-        Cursor += 4;
-        const uint32 IndexCount = ReadUInt32LE(Cursor);
-        Cursor += 4;
-        if (Version != 1 || VertexCount > static_cast<uint32>(MAX_int32) || IndexCount > static_cast<uint32>(MAX_int32))
-        {
-            ErrorMessage = FString::Printf(TEXT("Unsupported binary surface tile metadata: %s"), *MeshPath);
-            return false;
-        }
-
-        const double BoundsMinX = ReadDoubleLE(Cursor);
-        Cursor += 8;
-        const double BoundsMinY = ReadDoubleLE(Cursor);
-        Cursor += 8;
-        const double BoundsMinZ = ReadDoubleLE(Cursor);
-        Cursor += 8;
-        const double BoundsMaxX = ReadDoubleLE(Cursor);
-        Cursor += 8;
-        const double BoundsMaxY = ReadDoubleLE(Cursor);
-        Cursor += 8;
-        const double BoundsMaxZ = ReadDoubleLE(Cursor);
-        Cursor += 8;
-
-        const int64 VertexBytes = static_cast<int64>(VertexCount) * 3 * sizeof(double);
-        const int64 IndexBytes = static_cast<int64>(IndexCount) * sizeof(uint32);
-        const int64 ExpectedSize = static_cast<int64>(HeaderSize) + VertexBytes + IndexBytes;
-        if (Bytes.Num() != ExpectedSize || IndexCount % 3 != 0)
-        {
-            ErrorMessage = FString::Printf(TEXT("Binary surface tile size is invalid: %s"), *MeshPath);
-            return false;
-        }
-
-        Tile.TileId = FPaths::GetBaseFilename(MeshPath);
-        Tile.BoundsMin = FVector(BoundsMinX, BoundsMinY, BoundsMinZ);
-        Tile.BoundsMax = FVector(BoundsMaxX, BoundsMaxY, BoundsMaxZ);
-        Tile.SourceVertices.Reset(static_cast<int32>(VertexCount));
-        Tile.Triangles.Reset(static_cast<int32>(IndexCount));
-
-        const uint8* VertexCursor = Bytes.GetData() + HeaderSize;
-        for (uint32 Index = 0; Index < VertexCount; ++Index)
-        {
-            const double X = ReadDoubleLE(VertexCursor);
-            VertexCursor += 8;
-            const double Y = ReadDoubleLE(VertexCursor);
-            VertexCursor += 8;
-            const double Z = ReadDoubleLE(VertexCursor);
-            VertexCursor += 8;
-            Tile.SourceVertices.Add(FVector(X, Y, Z));
-        }
-
-        const uint8* IndexCursor = Bytes.GetData() + HeaderSize + VertexBytes;
-        for (uint32 Index = 0; Index < IndexCount; ++Index)
-        {
-            const uint32 TriangleIndex = ReadUInt32LE(IndexCursor);
-            IndexCursor += 4;
-            if (TriangleIndex >= VertexCount || TriangleIndex > static_cast<uint32>(MAX_int32))
-            {
-                ErrorMessage = FString::Printf(TEXT("Binary surface tile has an out-of-range triangle index: %s"), *MeshPath);
-                return false;
-            }
-            Tile.Triangles.Add(static_cast<int32>(TriangleIndex));
-        }
-
-        ErrorMessage.Empty();
-        return Tile.SourceVertices.Num() >= 3 && Tile.Triangles.Num() >= 3;
-    }
-
-    FString Json;
-    if (!FFileHelper::LoadFileToString(Json, *MeshPath))
-    {
-        ErrorMessage = FString::Printf(TEXT("Failed to read surface tile: %s"), *MeshPath);
+        ErrorMessage = FString::Printf(TEXT("Only current binary CSTopo surface tiles are supported during development: %s"), *MeshPath);
         return false;
     }
 
-    TSharedPtr<FJsonObject> Root;
-    const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
-    if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+    TArray<uint8> Bytes;
+    if (!FFileHelper::LoadFileToArray(Bytes, *MeshPath))
     {
-        ErrorMessage = FString::Printf(TEXT("Failed to parse surface tile JSON: %s"), *MeshPath);
+        ErrorMessage = FString::Printf(TEXT("Failed to read binary surface tile: %s"), *MeshPath);
         return false;
     }
 
-    Tile.TileId = Root->GetStringField(TEXT("tile_id"));
-    const TArray<TSharedPtr<FJsonValue>>* BoundsMinArray = nullptr;
-    const TArray<TSharedPtr<FJsonValue>>* BoundsMaxArray = nullptr;
-    const TArray<TSharedPtr<FJsonValue>>* VerticesArray = nullptr;
-    const TArray<TSharedPtr<FJsonValue>>* TrianglesArray = nullptr;
-    if (!Root->TryGetArrayField(TEXT("bounds_min"), BoundsMinArray)
-        || !Root->TryGetArrayField(TEXT("bounds_max"), BoundsMaxArray)
-        || !Root->TryGetArrayField(TEXT("vertices"), VerticesArray)
-        || !Root->TryGetArrayField(TEXT("triangles"), TrianglesArray))
+    constexpr int32 HeaderSize = 8 + 4 + 4 + 4 + (6 * 8);
+    const uint8 ExpectedMagic[8] = { 'C', 'S', 'T', 'T', 'I', 'N', '1', '\0' };
+    if (Bytes.Num() < HeaderSize || FMemory::Memcmp(Bytes.GetData(), ExpectedMagic, 8) != 0)
     {
-        ErrorMessage = TEXT("Surface tile JSON is missing bounds, vertices, or triangles.");
+        ErrorMessage = FString::Printf(TEXT("Invalid binary surface tile header: %s"), *MeshPath);
         return false;
     }
 
-    if (BoundsMinArray->Num() >= 3)
+    const uint8* Cursor = Bytes.GetData() + 8;
+    const uint32 Version = ReadUInt32LE(Cursor);
+    Cursor += 4;
+    const uint32 VertexCount = ReadUInt32LE(Cursor);
+    Cursor += 4;
+    const uint32 IndexCount = ReadUInt32LE(Cursor);
+    Cursor += 4;
+    if (Version != 1 || VertexCount > static_cast<uint32>(MAX_int32) || IndexCount > static_cast<uint32>(MAX_int32))
     {
-        Tile.BoundsMin = FVector((*BoundsMinArray)[0]->AsNumber(), (*BoundsMinArray)[1]->AsNumber(), (*BoundsMinArray)[2]->AsNumber());
-    }
-    if (BoundsMaxArray->Num() >= 3)
-    {
-        Tile.BoundsMax = FVector((*BoundsMaxArray)[0]->AsNumber(), (*BoundsMaxArray)[1]->AsNumber(), (*BoundsMaxArray)[2]->AsNumber());
+        ErrorMessage = FString::Printf(TEXT("Unsupported binary surface tile metadata: %s"), *MeshPath);
+        return false;
     }
 
-    Tile.SourceVertices.Reset();
-    Tile.Triangles.Reset();
-    for (const TSharedPtr<FJsonValue>& VertexValue : *VerticesArray)
+    const double BoundsMinX = ReadDoubleLE(Cursor);
+    Cursor += 8;
+    const double BoundsMinY = ReadDoubleLE(Cursor);
+    Cursor += 8;
+    const double BoundsMinZ = ReadDoubleLE(Cursor);
+    Cursor += 8;
+    const double BoundsMaxX = ReadDoubleLE(Cursor);
+    Cursor += 8;
+    const double BoundsMaxY = ReadDoubleLE(Cursor);
+    Cursor += 8;
+    const double BoundsMaxZ = ReadDoubleLE(Cursor);
+    Cursor += 8;
+
+    const int64 VertexBytes = static_cast<int64>(VertexCount) * 3 * sizeof(double);
+    const int64 IndexBytes = static_cast<int64>(IndexCount) * sizeof(uint32);
+    const int64 ExpectedSize = static_cast<int64>(HeaderSize) + VertexBytes + IndexBytes;
+    if (Bytes.Num() != ExpectedSize || IndexCount % 3 != 0)
     {
-        const TArray<TSharedPtr<FJsonValue>>* VertexArray = nullptr;
-        if (VertexValue.IsValid() && VertexValue->TryGetArray(VertexArray) && VertexArray->Num() >= 3)
+        ErrorMessage = FString::Printf(TEXT("Binary surface tile size is invalid: %s"), *MeshPath);
+        return false;
+    }
+
+    Tile.TileId = FPaths::GetBaseFilename(MeshPath);
+    Tile.BoundsMin = FVector(BoundsMinX, BoundsMinY, BoundsMinZ);
+    Tile.BoundsMax = FVector(BoundsMaxX, BoundsMaxY, BoundsMaxZ);
+    Tile.SourceVertices.Reset(static_cast<int32>(VertexCount));
+    Tile.Triangles.Reset(static_cast<int32>(IndexCount));
+
+    const uint8* VertexCursor = Bytes.GetData() + HeaderSize;
+    for (uint32 Index = 0; Index < VertexCount; ++Index)
+    {
+        const double X = ReadDoubleLE(VertexCursor);
+        VertexCursor += 8;
+        const double Y = ReadDoubleLE(VertexCursor);
+        VertexCursor += 8;
+        const double Z = ReadDoubleLE(VertexCursor);
+        VertexCursor += 8;
+        Tile.SourceVertices.Add(FVector(X, Y, Z));
+    }
+
+    const uint8* IndexCursor = Bytes.GetData() + HeaderSize + VertexBytes;
+    for (uint32 Index = 0; Index < IndexCount; ++Index)
+    {
+        const uint32 TriangleIndex = ReadUInt32LE(IndexCursor);
+        IndexCursor += 4;
+        if (TriangleIndex >= VertexCount || TriangleIndex > static_cast<uint32>(MAX_int32))
         {
-            Tile.SourceVertices.Add(FVector((*VertexArray)[0]->AsNumber(), (*VertexArray)[1]->AsNumber(), (*VertexArray)[2]->AsNumber()));
+            ErrorMessage = FString::Printf(TEXT("Binary surface tile has an out-of-range triangle index: %s"), *MeshPath);
+            return false;
         }
-    }
-    for (const TSharedPtr<FJsonValue>& TriangleValue : *TrianglesArray)
-    {
-        Tile.Triangles.Add(static_cast<int32>(TriangleValue->AsNumber()));
+        Tile.Triangles.Add(static_cast<int32>(TriangleIndex));
     }
 
     ErrorMessage.Empty();
     return Tile.SourceVertices.Num() >= 3 && Tile.Triangles.Num() >= 3;
 }
 
+bool UCSTopoSurveySubsystem::EnsureSurfaceTileGeometryLoaded(const FCSTopoPointCloudSource& Source, FCSTopoLoadedSurfaceTile& Tile, FString& ErrorMessage)
+{
+    if (Tile.bGeometryLoaded)
+    {
+        ErrorMessage.Empty();
+        return true;
+    }
+
+    if (Tile.MeshPath.IsEmpty())
+    {
+        ErrorMessage = FString::Printf(TEXT("Surface tile %s has no mesh path."), *Tile.TileId);
+        return false;
+    }
+
+    const double StartedAt = FPlatformTime::Seconds();
+    if (!LoadTileGeometry(Tile.MeshPath, Tile.MeshFormat, Tile, ErrorMessage))
+    {
+        return false;
+    }
+    Tile.bGeometryLoaded = true;
+    Tile.bTileLoadQueued = false;
+    UE_LOG(LogTemp, Verbose, TEXT("CSTopo surface tile geometry loaded: source=%s tile=%s vertices=%d triangles=%d seconds=%.3f"),
+        *Source.SourceId,
+        *Tile.TileId,
+        Tile.SourceVertices.Num(),
+        Tile.Triangles.Num() / 3,
+        FPlatformTime::Seconds() - StartedAt);
+    return true;
+}
+
+bool UCSTopoSurveySubsystem::EnsureSurfaceTileRenderMesh(FCSTopoPointCloudSource& Source, FCSTopoLoadedSurface& Surface, FCSTopoLoadedSurfaceTile& Tile, FString& ErrorMessage)
+{
+    if (Tile.MeshComponent != nullptr)
+    {
+        ErrorMessage.Empty();
+        return true;
+    }
+
+    if (!EnsureSurfaceTileGeometryLoaded(Source, Tile, ErrorMessage))
+    {
+        return false;
+    }
+
+    TObjectPtr<AActor>* SurfaceActorPtr = SurfaceActors.Find(Source.SourceId);
+    AActor* SurfaceActor = SurfaceActorPtr != nullptr ? SurfaceActorPtr->Get() : nullptr;
+    if (SurfaceActor == nullptr)
+    {
+        ErrorMessage = TEXT("Surface actor is not available for tile render mesh creation.");
+        return false;
+    }
+
+    USceneComponent* RootComponent = SurfaceActor->GetRootComponent();
+    if (RootComponent == nullptr)
+    {
+        ErrorMessage = TEXT("Surface actor root component is not available.");
+        return false;
+    }
+
+    const double StartedAt = FPlatformTime::Seconds();
+    UProceduralMeshComponent* Mesh = NewObject<UProceduralMeshComponent>(SurfaceActor, *FString::Printf(TEXT("SurfaceTile_%s"), *Tile.TileId));
+    Mesh->SetupAttachment(RootComponent);
+    Mesh->RegisterComponent();
+    Mesh->SetMobility(EComponentMobility::Movable);
+    Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Mesh->SetCollisionObjectType(CSTopoSurfaceCollisionChannel);
+    Mesh->SetCollisionResponseToAllChannels(ECR_Block);
+    Mesh->bUseAsyncCooking = false;
+
+    TArray<FVector> RenderVertices;
+    TArray<int32> RenderTriangles;
+    TArray<FVector> Normals;
+    TArray<FVector2D> UVs;
+    TArray<FLinearColor> Colors;
+    TArray<FProcMeshTangent> Tangents;
+    RenderVertices.Reserve(Tile.SourceVertices.Num());
+    RenderTriangles.Reserve(Tile.Triangles.Num());
+    Normals.Init(FVector::ZeroVector, Tile.SourceVertices.Num());
+    UVs.Init(FVector2D::ZeroVector, Tile.SourceVertices.Num());
+    Colors.Init(FLinearColor(0.72f, 0.76f, 0.78f, 1.0f), Tile.SourceVertices.Num());
+    Tangents.Init(FProcMeshTangent(1.0f, 0.0f, 0.0f), Tile.SourceVertices.Num());
+    for (const FVector& SourceVertex : Tile.SourceVertices)
+    {
+        RenderVertices.Add(SourceToRenderPoint(Source, SourceVertex));
+    }
+    for (int32 Index = 0; Index + 2 < Tile.Triangles.Num(); Index += 3)
+    {
+        const int32 AIndex = Tile.Triangles[Index];
+        const int32 BIndex = Tile.Triangles[Index + 1];
+        const int32 CIndex = Tile.Triangles[Index + 2];
+        if (!RenderVertices.IsValidIndex(AIndex) || !RenderVertices.IsValidIndex(BIndex) || !RenderVertices.IsValidIndex(CIndex))
+        {
+            continue;
+        }
+
+        FVector FaceNormal = FVector::CrossProduct(RenderVertices[BIndex] - RenderVertices[AIndex], RenderVertices[CIndex] - RenderVertices[AIndex]);
+        if (FaceNormal.Z < 0.0f)
+        {
+            FaceNormal *= -1.0f;
+        }
+        FaceNormal.Normalize();
+        Normals[AIndex] += FaceNormal;
+        Normals[BIndex] += FaceNormal;
+        Normals[CIndex] += FaceNormal;
+
+        RenderTriangles.Add(AIndex);
+        RenderTriangles.Add(CIndex);
+        RenderTriangles.Add(BIndex);
+    }
+    for (FVector& Normal : Normals)
+    {
+        if (!Normal.Normalize())
+        {
+            Normal = FVector::UpVector;
+        }
+    }
+    const double TileMinZ = Tile.BoundsMin.Z;
+    const double TileZRange = FMath::Max(Tile.BoundsMax.Z - Tile.BoundsMin.Z, 1.0);
+    for (int32 VertexIndex = 0; VertexIndex < RenderVertices.Num(); ++VertexIndex)
+    {
+        const double ElevationT = FMath::Clamp((Tile.SourceVertices[VertexIndex].Z - TileMinZ) / TileZRange, 0.0, 1.0);
+        const float SlopeShade = FMath::Clamp(0.52f + Normals[VertexIndex].Z * 0.42f, 0.45f, 0.98f);
+        const FLinearColor LowColor(0.36f, 0.45f, 0.43f, 1.0f);
+        const FLinearColor MidColor(0.60f, 0.58f, 0.50f, 1.0f);
+        const FLinearColor HighColor(0.82f, 0.76f, 0.62f, 1.0f);
+        const FLinearColor BaseColor = ElevationT < 0.5
+            ? FMath::Lerp(LowColor, MidColor, static_cast<float>(ElevationT * 2.0))
+            : FMath::Lerp(MidColor, HighColor, static_cast<float>((ElevationT - 0.5) * 2.0));
+        Colors[VertexIndex] = FLinearColor(BaseColor.R * SlopeShade, BaseColor.G * SlopeShade, BaseColor.B * SlopeShade, 1.0f);
+    }
+
+    Mesh->CreateMeshSection_LinearColor(0, RenderVertices, RenderTriangles, Normals, UVs, Colors, Tangents, true);
+    static UMaterialInterface* VertexColorMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/VertexColorMaterial.VertexColorMaterial"));
+    Mesh->SetMaterial(0, VertexColorMaterial != nullptr ? VertexColorMaterial : UMaterial::GetDefaultMaterial(MD_Surface));
+    Mesh->SetCastShadow(false);
+    Mesh->bCastDynamicShadow = false;
+    Mesh->SetVisibility(false, true);
+    Mesh->SetHiddenInGame(true, true);
+    Tile.MeshComponent = Mesh;
+    UE_LOG(LogTemp, Verbose, TEXT("CSTopo surface tile render mesh created: source=%s tile=%s seconds=%.3f"),
+        *Source.SourceId,
+        *Tile.TileId,
+        FPlatformTime::Seconds() - StartedAt);
+    ErrorMessage.Empty();
+    return true;
+}
+
+void UCSTopoSurveySubsystem::QueueSurfaceTileLoad(FCSTopoLoadedSurface& Surface, FCSTopoLoadedSurfaceTile& Tile)
+{
+    if (Tile.bGeometryLoaded || Tile.bTileLoadQueued)
+    {
+        return;
+    }
+    Tile.bTileLoadQueued = true;
+    Surface.PendingTileLoadIds.Add(Tile.TileId);
+}
+
+void UCSTopoSurveySubsystem::ProcessPendingSurfaceTileLoads(FCSTopoPointCloudSource& Source, int32 MaxTiles, int64 MaxBytes)
+{
+    FCSTopoLoadedSurface* Surface = LoadedSurfaces.Find(Source.SourceId);
+    if (Surface == nullptr || Surface->PendingTileLoadIds.IsEmpty())
+    {
+        return;
+    }
+
+    int32 LoadedCount = 0;
+    int64 LoadedBytes = 0;
+    const double StartedAt = FPlatformTime::Seconds();
+    while (!Surface->PendingTileLoadIds.IsEmpty() && LoadedCount < MaxTiles && LoadedBytes < MaxBytes)
+    {
+        const FString TileId = Surface->PendingTileLoadIds[0];
+        Surface->PendingTileLoadIds.RemoveAt(0);
+        FCSTopoLoadedSurfaceTile* Tile = Surface->Tiles.FindByPredicate([&TileId](const FCSTopoLoadedSurfaceTile& Candidate)
+        {
+            return Candidate.TileId == TileId;
+        });
+        if (Tile == nullptr)
+        {
+            continue;
+        }
+
+        if (Tile->bGeometryLoaded)
+        {
+            Tile->bTileLoadQueued = false;
+            if (Tile->bRuntimeVisible)
+            {
+                FString MeshMessage;
+                EnsureSurfaceTileRenderMesh(Source, *Surface, *Tile, MeshMessage);
+            }
+            continue;
+        }
+
+        const int64 TileBytes = FPaths::FileExists(Tile->MeshPath) ? IFileManager::Get().FileSize(*Tile->MeshPath) : 0;
+        FString LoadMessage;
+        if (EnsureSurfaceTileGeometryLoaded(Source, *Tile, LoadMessage))
+        {
+            ++LoadedCount;
+            LoadedBytes += FMath::Max<int64>(TileBytes, 0);
+            if (Tile->bRuntimeVisible)
+            {
+                EnsureSurfaceTileRenderMesh(Source, *Surface, *Tile, LoadMessage);
+            }
+        }
+        else
+        {
+            Tile->bTileLoadQueued = false;
+        }
+    }
+
+    if (LoadedCount > 0)
+    {
+        Source.SurfaceBuildProgressMessage = FString::Printf(TEXT("Loaded %d nearby surface tile(s); %d queued."), LoadedCount, Surface->PendingTileLoadIds.Num());
+        UE_LOG(LogTemp, Log, TEXT("CSTopo lazy surface tile load: source=%s loaded=%d bytes=%lld queued=%d seconds=%.3f"),
+            *Source.SourceId,
+            LoadedCount,
+            LoadedBytes,
+            Surface->PendingTileLoadIds.Num(),
+            FPlatformTime::Seconds() - StartedAt);
+    }
+}
+
 bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource& Source, FString& ErrorMessage)
 {
+    const double LoadStartedAt = FPlatformTime::Seconds();
     if (Source.SurfaceManifestPath.IsEmpty())
     {
         Source.SurfaceManifestPath = FPaths::Combine(GetProjectCacheDirectory(), TEXT("surfaces"), Source.SourceId.Left(8), TEXT("surface_manifest.json"));
@@ -1764,14 +1943,17 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
     }
 
     FString Json;
+    const double ManifestReadStartedAt = FPlatformTime::Seconds();
     if (!FFileHelper::LoadFileToString(Json, *Source.SurfaceManifestPath))
     {
         ErrorMessage = FString::Printf(TEXT("Failed to read surface manifest: %s"), *Source.SurfaceManifestPath);
         Source.SurfaceBuildState = ECSTopoSurfaceBuildState::Failed;
         return false;
     }
+    const double ManifestReadSeconds = FPlatformTime::Seconds() - ManifestReadStartedAt;
 
     TSharedPtr<FJsonObject> Root;
+    const double ManifestParseStartedAt = FPlatformTime::Seconds();
     const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
     if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
     {
@@ -1779,6 +1961,7 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
         Source.SurfaceBuildState = ECSTopoSurfaceBuildState::Failed;
         return false;
     }
+    const double ManifestParseSeconds = FPlatformTime::Seconds() - ManifestParseStartedAt;
 
     FCSTopoDerivedSurfaceManifest Manifest;
     if (!Root->TryGetStringField(TEXT("schema_version"), Manifest.SchemaVersion)
@@ -1865,6 +2048,7 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
     Loaded.ManifestPath = Source.SurfaceManifestPath;
     Loaded.SourceCenter = GetSourceCenter(Source);
 
+    const double TileMetadataStartedAt = FPlatformTime::Seconds();
     if (TilesArray != nullptr)
     {
         for (const TSharedPtr<FJsonValue>& TileValue : *TilesArray)
@@ -1883,7 +2067,7 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
             (*TileObject)->TryGetStringField(TEXT("mesh_format"), TileRecord.MeshFormat);
             if (TileRecord.MeshFormat.IsEmpty())
             {
-                TileRecord.MeshFormat = SurfaceTileFormatJson;
+                TileRecord.MeshFormat = SurfaceTileFormatBinary;
             }
             TileRecord.Status = (*TileObject)->GetStringField(TEXT("status"));
             if ((*TileObject)->HasField(TEXT("input_point_count")))
@@ -1917,15 +2101,19 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
             Manifest.Tiles.Add(TileRecord);
 
             FCSTopoLoadedSurfaceTile LoadedTile;
-            if (LoadTileGeometry(TileRecord.MeshPath, TileRecord.MeshFormat, LoadedTile, ErrorMessage))
-            {
-                LoadedTile.TileId = TileRecord.TileId;
-                LoadedTile.BoundaryEdgeCount = TileRecord.BoundaryEdgeCount;
-                LoadedTile.BoundaryLoopCount = TileRecord.BoundaryLoopCount;
-                Loaded.Tiles.Add(MoveTemp(LoadedTile));
-            }
+            LoadedTile.TileId = TileRecord.TileId;
+            LoadedTile.MeshPath = TileRecord.MeshPath;
+            LoadedTile.MeshFormat = TileRecord.MeshFormat;
+            LoadedTile.BoundsMin = TileRecord.BoundsMin;
+            LoadedTile.BoundsMax = TileRecord.BoundsMax;
+            LoadedTile.BoundaryEdgeCount = TileRecord.BoundaryEdgeCount;
+            LoadedTile.BoundaryLoopCount = TileRecord.BoundaryLoopCount;
+            LoadedTile.bGeometryLoaded = false;
+            LoadedTile.bRuntimeVisible = false;
+            Loaded.Tiles.Add(MoveTemp(LoadedTile));
         }
     }
+    const double TileMetadataSeconds = FPlatformTime::Seconds() - TileMetadataStartedAt;
 
     if (Loaded.Tiles.IsEmpty())
     {
@@ -1941,6 +2129,7 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
     ActiveProject.DerivedSurfaces.Add(Manifest);
     LoadedSurfaces.Add(Source.SourceId, MoveTemp(Loaded));
 
+    const double ActorSetupStartedAt = FPlatformTime::Seconds();
     if (TObjectPtr<AActor>* ExistingActor = SurfaceActors.Find(Source.SourceId))
     {
         if (ExistingActor->Get() != nullptr)
@@ -1984,102 +2173,15 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
     CollisionProxy->bUseAsyncCooking = true;
     Surface.CollisionProxyComponent = CollisionProxy;
 
-    for (int32 TileIndex = 0; TileIndex < Surface.Tiles.Num(); ++TileIndex)
-    {
-        FCSTopoLoadedSurfaceTile& Tile = Surface.Tiles[TileIndex];
-        UProceduralMeshComponent* Mesh = NewObject<UProceduralMeshComponent>(SurfaceActor, *FString::Printf(TEXT("SurfaceTile_%d"), TileIndex));
-        Mesh->SetupAttachment(RootComponent);
-        Mesh->RegisterComponent();
-        Mesh->SetMobility(EComponentMobility::Movable);
-        Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-        // CSTopo walk mode blocks only this dedicated survey-surface channel.
-        // Keeping derived tiles off WorldStatic prevents hidden/editor/level
-        // collision from becoming indistinguishable from the survey floor.
-        Mesh->SetCollisionObjectType(CSTopoSurfaceCollisionChannel);
-        Mesh->SetCollisionResponseToAllChannels(ECR_Block);
-        Mesh->bUseAsyncCooking = false;
-
-        TArray<FVector> RenderVertices;
-        TArray<int32> RenderTriangles;
-        TArray<FVector> Normals;
-        TArray<FVector2D> UVs;
-        TArray<FLinearColor> Colors;
-        TArray<FProcMeshTangent> Tangents;
-        RenderVertices.Reserve(Tile.SourceVertices.Num());
-        RenderTriangles.Reserve(Tile.Triangles.Num());
-        Normals.Init(FVector::ZeroVector, Tile.SourceVertices.Num());
-        UVs.Init(FVector2D::ZeroVector, Tile.SourceVertices.Num());
-        Colors.Init(FLinearColor(0.72f, 0.76f, 0.78f, 1.0f), Tile.SourceVertices.Num());
-        Tangents.Init(FProcMeshTangent(1.0f, 0.0f, 0.0f), Tile.SourceVertices.Num());
-        for (const FVector& SourceVertex : Tile.SourceVertices)
-        {
-            RenderVertices.Add(SourceToRenderPoint(Source, SourceVertex));
-        }
-        for (int32 Index = 0; Index + 2 < Tile.Triangles.Num(); Index += 3)
-        {
-            const int32 AIndex = Tile.Triangles[Index];
-            const int32 BIndex = Tile.Triangles[Index + 1];
-            const int32 CIndex = Tile.Triangles[Index + 2];
-            if (!RenderVertices.IsValidIndex(AIndex) || !RenderVertices.IsValidIndex(BIndex) || !RenderVertices.IsValidIndex(CIndex))
-            {
-                continue;
-            }
-
-            FVector FaceNormal = FVector::CrossProduct(RenderVertices[BIndex] - RenderVertices[AIndex], RenderVertices[CIndex] - RenderVertices[AIndex]);
-            if (FaceNormal.Z < 0.0f)
-            {
-                FaceNormal *= -1.0f;
-            }
-            FaceNormal.Normalize();
-            Normals[AIndex] += FaceNormal;
-            Normals[BIndex] += FaceNormal;
-            Normals[CIndex] += FaceNormal;
-
-            RenderTriangles.Add(AIndex);
-            RenderTriangles.Add(CIndex);
-            RenderTriangles.Add(BIndex);
-        }
-        for (FVector& Normal : Normals)
-        {
-            if (!Normal.Normalize())
-            {
-                Normal = FVector::UpVector;
-            }
-        }
-        const double TileMinZ = Tile.BoundsMin.Z;
-        const double TileZRange = FMath::Max(Tile.BoundsMax.Z - Tile.BoundsMin.Z, 1.0);
-        for (int32 VertexIndex = 0; VertexIndex < RenderVertices.Num(); ++VertexIndex)
-        {
-            const double ElevationT = FMath::Clamp((Tile.SourceVertices[VertexIndex].Z - TileMinZ) / TileZRange, 0.0, 1.0);
-            const float SlopeShade = FMath::Clamp(0.52f + Normals[VertexIndex].Z * 0.42f, 0.45f, 0.98f);
-            const FLinearColor LowColor(0.36f, 0.45f, 0.43f, 1.0f);
-            const FLinearColor MidColor(0.60f, 0.58f, 0.50f, 1.0f);
-            const FLinearColor HighColor(0.82f, 0.76f, 0.62f, 1.0f);
-            const FLinearColor BaseColor = ElevationT < 0.5
-                ? FMath::Lerp(LowColor, MidColor, static_cast<float>(ElevationT * 2.0))
-                : FMath::Lerp(MidColor, HighColor, static_cast<float>((ElevationT - 0.5) * 2.0));
-            Colors[VertexIndex] = FLinearColor(BaseColor.R * SlopeShade, BaseColor.G * SlopeShade, BaseColor.B * SlopeShade, 1.0f);
-        }
-
-        Mesh->CreateMeshSection_LinearColor(0, RenderVertices, RenderTriangles, Normals, UVs, Colors, Tangents, true);
-        static UMaterialInterface* VertexColorMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/EngineMaterials/VertexColorMaterial.VertexColorMaterial"));
-        Mesh->SetMaterial(0, VertexColorMaterial != nullptr ? VertexColorMaterial : UMaterial::GetDefaultMaterial(MD_Surface));
-        Mesh->SetCastShadow(false);
-        Mesh->bCastDynamicShadow = false;
-        Mesh->SetVisibility(false, true);
-        Mesh->SetHiddenInGame(true, true);
-        Tile.bRuntimeVisible = false;
-        Tile.MeshComponent = Mesh;
-    }
-
     SurfaceActors.Add(Source.SourceId, SurfaceActor);
+    const double ActorSetupSeconds = FPlatformTime::Seconds() - ActorSetupStartedAt;
     Source.SurfaceId = Manifest.SurfaceId;
     Source.SurfaceBuildState = ECSTopoSurfaceBuildState::Ready;
     Source.SurfaceBuildProgress = 1.0f;
     Source.SurfaceBuildProgressStage = TEXT("Ready");
-    Source.SurfaceBuildProgressMessage = TEXT("Derived surface is ready.");
+    Source.SurfaceBuildProgressMessage = TEXT("Derived surface manifest is ready; nearby tiles load on demand.");
     Source.SurfaceStatus = FString::Printf(
-        TEXT("Surface ready: %d tile(s) | %s | %s | %d vertices | %d triangles | %s | TIN trim edge %.2f | rejected %d large triangles | %s"),
+        TEXT("Surface ready: %d tile(s) | %s | %s | %d vertices | %d triangles | %s | TIN trim edge %.2f | rejected %d large triangles | %s | lazy tiles"),
         Manifest.TileCount,
         *Manifest.BuildMethod,
         *Manifest.GroundSource,
@@ -2089,8 +2191,30 @@ bool UCSTopoSurveySubsystem::LoadDerivedSurfaceForSource(FCSTopoPointCloudSource
         Manifest.TinResolvedMaxEdgeLengthSourceUnits,
         Manifest.TinRejectedLargeTriangleCount,
         *Manifest.SurfaceCollisionMode);
+    const double InitialVisibleStartedAt = FPlatformTime::Seconds();
     UpdateVisibleSurfaceTiles(Source, GetSourceCenter(Source), true);
+    ProcessPendingSurfaceTileLoads(Source, 2, 16ll * 1024ll * 1024ll);
+    const double InitialVisibleSeconds = FPlatformTime::Seconds() - InitialVisibleStartedAt;
     RefreshSurfacePresentation(Source);
+    int32 LoadedTileCount = 0;
+    int32 RenderMeshCount = 0;
+    for (const FCSTopoLoadedSurfaceTile& Tile : Surface.Tiles)
+    {
+        LoadedTileCount += Tile.bGeometryLoaded ? 1 : 0;
+        RenderMeshCount += Tile.MeshComponent != nullptr ? 1 : 0;
+    }
+    UE_LOG(LogTemp, Log, TEXT("CSTopo surface load timings: source=%s manifest_read=%.3fs manifest_parse=%.3fs tile_metadata=%.3fs actor_setup=%.3fs initial_visible_collision=%.3fs loaded_tiles=%d/%d render_meshes=%d queued=%d total=%.3fs"),
+        *Source.SourceId,
+        ManifestReadSeconds,
+        ManifestParseSeconds,
+        TileMetadataSeconds,
+        ActorSetupSeconds,
+        InitialVisibleSeconds,
+        LoadedTileCount,
+        Surface.Tiles.Num(),
+        RenderMeshCount,
+        Surface.PendingTileLoadIds.Num(),
+        FPlatformTime::Seconds() - LoadStartedAt);
     ErrorMessage = Source.SurfaceStatus;
     return true;
 }
@@ -2166,6 +2290,17 @@ bool UCSTopoSurveySubsystem::TraceActiveDerivedSurface(const FCSTopoPointCloudSo
             continue;
         }
 
+        if (!Tile.bGeometryLoaded)
+        {
+            FString LoadMessage;
+            FCSTopoLoadedSurfaceTile& MutableTile = const_cast<FCSTopoLoadedSurfaceTile&>(Tile);
+            if (!const_cast<UCSTopoSurveySubsystem*>(this)->EnsureSurfaceTileGeometryLoaded(Source, MutableTile, LoadMessage))
+            {
+                UE_LOG(LogTemp, Warning, TEXT("CSTopo sync tile load for surface trace failed: %s"), *LoadMessage);
+                continue;
+            }
+        }
+
         for (int32 Index = 0; Index + 2 < Tile.Triangles.Num(); Index += 3)
         {
             const FVector A = SourceToRenderPoint(Source, Tile.SourceVertices[Tile.Triangles[Index]]);
@@ -2200,6 +2335,17 @@ bool UCSTopoSurveySubsystem::QueryDerivedSurfaceHeightAtSourceXY(const FCSTopoPo
         if (SourceX < Tile.BoundsMin.X || SourceX > Tile.BoundsMax.X || SourceY < Tile.BoundsMin.Y || SourceY > Tile.BoundsMax.Y)
         {
             continue;
+        }
+
+        if (!Tile.bGeometryLoaded)
+        {
+            FString LoadMessage;
+            FCSTopoLoadedSurfaceTile& MutableTile = const_cast<FCSTopoLoadedSurfaceTile&>(Tile);
+            if (!const_cast<UCSTopoSurveySubsystem*>(this)->EnsureSurfaceTileGeometryLoaded(Source, MutableTile, LoadMessage))
+            {
+                UE_LOG(LogTemp, Warning, TEXT("CSTopo sync tile load for height query failed: %s"), *LoadMessage);
+                continue;
+            }
         }
 
         const FVector2D P(SourceX, SourceY);
@@ -2264,6 +2410,17 @@ bool UCSTopoSurveySubsystem::QueryNearestDerivedSurfaceHeightAtSourceXY(const FC
             || SourceY > Tile.BoundsMax.Y + SearchRadiusSourceUnits)
         {
             continue;
+        }
+
+        if (!Tile.bGeometryLoaded)
+        {
+            FString LoadMessage;
+            FCSTopoLoadedSurfaceTile& MutableTile = const_cast<FCSTopoLoadedSurfaceTile&>(Tile);
+            if (!const_cast<UCSTopoSurveySubsystem*>(this)->EnsureSurfaceTileGeometryLoaded(Source, MutableTile, LoadMessage))
+            {
+                UE_LOG(LogTemp, Warning, TEXT("CSTopo sync tile load for nearest height query failed: %s"), *LoadMessage);
+                continue;
+            }
         }
 
         for (const FVector& Vertex : Tile.SourceVertices)
@@ -3104,6 +3261,15 @@ void UCSTopoSurveySubsystem::UpdateVisibleSurfaceTiles(FCSTopoPointCloudSource& 
         if (bTileVisible)
         {
             Surface->RuntimeVisibleTileIds.Add(Tile.TileId);
+            if (Tile.bGeometryLoaded)
+            {
+                FString MeshMessage;
+                EnsureSurfaceTileRenderMesh(Source, *Surface, Tile, MeshMessage);
+            }
+            else
+            {
+                QueueSurfaceTileLoad(*Surface, Tile);
+            }
         }
     }
 
@@ -3198,10 +3364,16 @@ void UCSTopoSurveySubsystem::RebuildSurfaceCollisionProxy(const FCSTopoPointClou
     };
 
     const double CollisionRadiusSq = FMath::Square(CollisionRadius);
-    for (const FCSTopoLoadedSurfaceTile& Tile : Surface.Tiles)
+    for (FCSTopoLoadedSurfaceTile& Tile : Surface.Tiles)
     {
         if (!CandidateTileIds.Contains(Tile.TileId))
         {
+            continue;
+        }
+        FString LoadMessage;
+        if (!EnsureSurfaceTileGeometryLoaded(Source, Tile, LoadMessage))
+        {
+            UE_LOG(LogTemp, Warning, TEXT("CSTopo failed to load collision surface tile %s: %s"), *Tile.TileId, *LoadMessage);
             continue;
         }
         for (int32 Index = 0; Index + 2 < Tile.Triangles.Num(); Index += 3)
@@ -3703,6 +3875,7 @@ bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, 
 
 bool UCSTopoSurveySubsystem::SpawnPointCloudActor(FCSTopoPointCloudSource& Source, FString& ErrorMessage)
 {
+    const double SpawnStartedAt = FPlatformTime::Seconds();
     UCSTopoPointCloudImport::RefreshSourceRuntimeState(Source, ErrorMessage);
     const FString DisplayPath = (Source.bRuntimeWindowActive && FPaths::FileExists(Source.RuntimeWindowPath))
         ? Source.RuntimeWindowPath
@@ -3746,6 +3919,7 @@ bool UCSTopoSurveySubsystem::SpawnPointCloudActor(FCSTopoPointCloudSource& Sourc
     }
 
     const FName AssetName(*FString::Printf(TEXT("CSTopo_%s"), *Source.SourceId.Left(8)));
+    const double ImportStartedAt = FPlatformTime::Seconds();
     ULidarPointCloud* PointCloud = ULidarPointCloud::CreateFromFile(
         DisplayPath,
         FLidarPointCloudAsyncParameters(false),
@@ -3753,6 +3927,7 @@ bool UCSTopoSurveySubsystem::SpawnPointCloudActor(FCSTopoPointCloudSource& Sourc
         GetTransientPackage(),
         AssetName,
         RF_Transient);
+    const double ImportSeconds = FPlatformTime::Seconds() - ImportStartedAt;
 
     if (PointCloud == nullptr)
     {
@@ -3798,6 +3973,11 @@ bool UCSTopoSurveySubsystem::SpawnPointCloudActor(FCSTopoPointCloudSource& Sourc
     Source.bVisible = true;
     RefreshPointCloudViewMode(Source);
     RefreshSurfacePresentation(Source);
+    UE_LOG(LogTemp, Log, TEXT("CSTopo point-cloud actor spawn timings: source=%s import=%.3fs total=%.3fs path=%s"),
+        *Source.SourceId,
+        ImportSeconds,
+        FPlatformTime::Seconds() - SpawnStartedAt,
+        *DisplayPath);
     ErrorMessage = Source.CacheStatus;
     return true;
 }
@@ -3910,6 +4090,7 @@ void UCSTopoSurveySubsystem::UpdateRuntimeStreaming(const FVector& CameraRenderL
 
     const FVector CameraSourcePoint = RenderToSourcePoint(*Source, CameraRenderLocation);
     UpdateVisibleSurfaceTiles(*Source, CameraSourcePoint, false);
+    ProcessPendingSurfaceTileLoads(*Source, 3, 16ll * 1024ll * 1024ll);
 
     if (!ShouldUseCopcWindowStreaming(*Source))
     {
