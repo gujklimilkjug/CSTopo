@@ -48,6 +48,7 @@ public:
 
     void OpenProjectFromDialog();
     void ImportPointCloudToNewProjectFromDialog();
+    void ExitApplication();
 
 private:
     enum class ESurveyInputMode : uint8

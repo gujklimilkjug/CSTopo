@@ -353,6 +353,9 @@ struct FCSTopoSurfaceSettings
     double VisibleTileRadiusSourceUnits = 650.0;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    double VisibleTileRadiusTileMultiplier = 6.0;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     int32 MaxSurfaceFillCells = 2;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
@@ -606,6 +609,27 @@ struct FCSTopoRuntimeStreamingSettings
 };
 
 USTRUCT(BlueprintType)
+struct FCSTopoNavigationSettings
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    float WalkEyeHeight = 152.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    float WalkSpeed = 600.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    float FlySpeedScale = 1.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    float LookSensitivity = 0.5f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    float PrecisionSensitivity = 0.25f;
+};
+
+USTRUCT(BlueprintType)
 struct FCSTopoCodeStyle
 {
     GENERATED_BODY()
@@ -810,6 +834,9 @@ struct FCSTopoProjectDocument
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FCSTopoRuntimeStreamingSettings RuntimeStreaming;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
+    FCSTopoNavigationSettings NavigationSettings;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CSTopo")
     FCSTopoSurfaceSettings SurfaceSettings;

@@ -16,6 +16,7 @@
 #include "GameFramework/PlayerInput.h"
 #include "IDesktopPlatform.h"
 #include "Framework/Application/SlateApplication.h"
+#include "HAL/PlatformMisc.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "Input/Events.h"
@@ -100,7 +101,10 @@ void ACSTopoPlayerController::BeginPlay()
 
         SAssignNew(MainMenu, SCSTopoMainMenu)
             .SurveySubsystem(Survey)
-            .PointCloudToolbar(PointCloudToolbar);
+            .PointCloudToolbar(PointCloudToolbar)
+            .OnNewProject(FSimpleDelegate::CreateUObject(this, &ACSTopoPlayerController::ImportPointCloudToNewProjectFromDialog))
+            .OnOpenProject(FSimpleDelegate::CreateUObject(this, &ACSTopoPlayerController::OpenProjectFromDialog))
+            .OnExit(FSimpleDelegate::CreateUObject(this, &ACSTopoPlayerController::ExitApplication));
 
         MainMenuContainer = SNew(SWeakWidget)
             .PossiblyNullContent(MainMenu.ToSharedRef());
@@ -439,7 +443,7 @@ void ACSTopoPlayerController::SetSurveyInputEnabled(bool bEnabled)
 
     if (MainMenu.IsValid())
     {
-        MainMenu->SetVisibility(EVisibility::Collapsed);
+        MainMenu->SetVisibility(bEnabled ? EVisibility::Visible : EVisibility::Collapsed);
     }
     if (Reticle.IsValid())
     {
@@ -624,6 +628,11 @@ void ACSTopoPlayerController::ImportPointCloudToNewProjectFromDialog()
 
     Survey->SetWorkflowState(ECSTopoWorkflowState::BuildingSurface, ErrorMessage);
     MonitorStartupSurfaceBuild();
+}
+
+void ACSTopoPlayerController::ExitApplication()
+{
+    FPlatformMisc::RequestExit(false);
 }
 
 void ACSTopoPlayerController::RetrySurfaceBuild()

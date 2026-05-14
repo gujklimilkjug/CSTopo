@@ -140,6 +140,7 @@ private:
     void UpdatePrecisionState(float DeltaSeconds);
     void ValidateWalkSurface(float DeltaSeconds);
     void FocusOnActivePointCloudIfNeeded();
+    void ApplyProjectNavigationSettings();
     void ConfigureMovementForMode();
     void RefreshMovementSpeed();
     void RefreshRuntimeNavigationState() const;
@@ -164,6 +165,7 @@ private:
     float ResolvedRightInput = 0.0f;
     float ResolvedUpInput = 0.0f;
     float CurrentLookSensitivityScalar = 1.0f;
+    float RuntimeFlySpeedScale = 1.0f;
     int32 CurrentFlySpeedBandIndex = 3;
     bool bPrecisionModeActive = false;
     bool bHasHoverSnap = false;

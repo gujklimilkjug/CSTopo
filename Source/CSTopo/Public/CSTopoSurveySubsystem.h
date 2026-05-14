@@ -36,8 +36,10 @@ struct FCSTopoLoadedSurface
     TObjectPtr<class UProceduralMeshComponent> CollisionProxyComponent = nullptr;
     FVector LastCollisionProxySourceLocation = FVector::ZeroVector;
     FVector LastVisibilitySourceLocation = FVector::ZeroVector;
+    double LastVisibilityRadiusSourceUnits = 0.0;
     bool bHasCollisionProxySourceLocation = false;
     bool bHasVisibilitySourceLocation = false;
+    bool bPendingTileLoadSortDirty = false;
     float TileVisibilityRefreshCooldown = 0.0f;
 
     bool IsReady() const
@@ -259,6 +261,15 @@ public:
     bool PreviewMeasurementAtView(const FVector& ViewOrigin, const FVector& ViewDirection, float TraceRadius, float SampleRadius, FCSTopoMeasurementPreview& Preview, bool bAllowExpensiveSearch = true) const;
     bool AdjustActivePointCloudPointSize(float Delta, float& NewPointSize, FString& ErrorMessage);
     bool GetActivePointCloudPointSize(float& PointSize, FString& ErrorMessage) const;
+    void SetSurfaceViewTileMultiplier(double Multiplier);
+    double GetSurfaceViewTileMultiplier() const;
+    double GetApproxSurfaceViewRadiusSourceUnits() const;
+    void SetNavigationWalkEyeHeight(float EyeHeight);
+    void SetNavigationWalkSpeed(float Speed);
+    void SetNavigationFlySpeedScale(float Scale);
+    void SetNavigationLookSensitivity(float Sensitivity);
+    void SetNavigationPrecisionSensitivity(float Sensitivity);
+    void ResetRuntimeTuningOptions();
 
 private:
     UPROPERTY()

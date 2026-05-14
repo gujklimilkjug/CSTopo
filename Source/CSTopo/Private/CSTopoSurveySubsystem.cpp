@@ -1,5 +1,6 @@
 #include "CSTopoSurveySubsystem.h"
 
+#include "Algo/Sort.h"
 #include "CSTopoExporter.h"
 #include "CSTopoPointCloudImport.h"
 #include "CSTopoProjectLibrary.h"
@@ -86,6 +87,30 @@ FVector SourceToRenderPoint(const FCSTopoPointCloudSource& Source, const FVector
 FVector RenderToSourcePoint(const FCSTopoPointCloudSource& Source, const FVector& RenderPoint)
 {
     return (RenderPoint / static_cast<float>(GetRenderUnitsPerSourceUnit(Source))) + GetSourceCenter(Source);
+}
+
+double SourceBoundsDiagonal2D(const FCSTopoPointCloudSource& Source)
+{
+    return FVector2D::Distance(
+        FVector2D(Source.BoundsMin.X, Source.BoundsMin.Y),
+        FVector2D(Source.BoundsMax.X, Source.BoundsMax.Y));
+}
+
+double ResolveSurfaceVisibleRadiusSourceUnits(const FCSTopoPointCloudSource& Source, const FCSTopoSurfaceSettings& Settings)
+{
+    const double TileSize = FMath::Max(Settings.TileSizeSourceUnits, 1.0);
+    const double BaseRadius = FMath::Max(Settings.VisibleTileRadiusSourceUnits, TileSize * 2.0);
+    const double TileMultiplier = FMath::Clamp(Settings.VisibleTileRadiusTileMultiplier, 2.0, 12.0);
+    const double ExtentRadius = FMath::Clamp(SourceBoundsDiagonal2D(Source) * 0.10, BaseRadius, TileSize * TileMultiplier);
+    return FMath::Max(BaseRadius, ExtentRadius) + (TileSize * 0.15);
+}
+
+double SurfaceTileDistanceSq2D(const FCSTopoLoadedSurfaceTile& Tile, const FVector& SourceLocation)
+{
+    const FVector TileCenter = (Tile.BoundsMin + Tile.BoundsMax) * 0.5;
+    return FVector2D::DistSquared(
+        FVector2D(SourceLocation.X, SourceLocation.Y),
+        FVector2D(TileCenter.X, TileCenter.Y));
 }
 
 double RenderDistanceToSourceDistance(const FCSTopoPointCloudSource& Source, double RenderDistance)
@@ -1861,6 +1886,7 @@ void UCSTopoSurveySubsystem::QueueSurfaceTileLoad(FCSTopoLoadedSurface& Surface,
     }
     Tile.bTileLoadQueued = true;
     Surface.PendingTileLoadIds.Add(Tile.TileId);
+    Surface.bPendingTileLoadSortDirty = true;
 }
 
 void UCSTopoSurveySubsystem::ProcessPendingSurfaceTileLoads(FCSTopoPointCloudSource& Source, int32 MaxTiles, int64 MaxBytes)
@@ -1869,6 +1895,28 @@ void UCSTopoSurveySubsystem::ProcessPendingSurfaceTileLoads(FCSTopoPointCloudSou
     if (Surface == nullptr || Surface->PendingTileLoadIds.IsEmpty())
     {
         return;
+    }
+
+    if (Surface->bPendingTileLoadSortDirty && Surface->bHasVisibilitySourceLocation)
+    {
+        TMap<FString, double> DistanceSqByTileId;
+        DistanceSqByTileId.Reserve(Surface->Tiles.Num());
+        for (const FCSTopoLoadedSurfaceTile& Tile : Surface->Tiles)
+        {
+            DistanceSqByTileId.Add(Tile.TileId, SurfaceTileDistanceSq2D(Tile, Surface->LastVisibilitySourceLocation));
+        }
+
+        Algo::Sort(Surface->PendingTileLoadIds, [&DistanceSqByTileId](const FString& Left, const FString& Right)
+        {
+            const double LeftDistanceSq = DistanceSqByTileId.FindRef(Left);
+            const double RightDistanceSq = DistanceSqByTileId.FindRef(Right);
+            if (!FMath::IsNearlyEqual(LeftDistanceSq, RightDistanceSq))
+            {
+                return LeftDistanceSq < RightDistanceSq;
+            }
+            return Left < Right;
+        });
+        Surface->bPendingTileLoadSortDirty = false;
     }
 
     int32 LoadedCount = 0;
@@ -1887,14 +1935,17 @@ void UCSTopoSurveySubsystem::ProcessPendingSurfaceTileLoads(FCSTopoPointCloudSou
             continue;
         }
 
+        if (!Tile->bRuntimeVisible)
+        {
+            Tile->bTileLoadQueued = false;
+            continue;
+        }
+
         if (Tile->bGeometryLoaded)
         {
             Tile->bTileLoadQueued = false;
-            if (Tile->bRuntimeVisible)
-            {
-                FString MeshMessage;
-                EnsureSurfaceTileRenderMesh(Source, *Surface, *Tile, MeshMessage);
-            }
+            FString MeshMessage;
+            EnsureSurfaceTileRenderMesh(Source, *Surface, *Tile, MeshMessage);
             continue;
         }
 
@@ -1904,10 +1955,7 @@ void UCSTopoSurveySubsystem::ProcessPendingSurfaceTileLoads(FCSTopoPointCloudSou
         {
             ++LoadedCount;
             LoadedBytes += FMath::Max<int64>(TileBytes, 0);
-            if (Tile->bRuntimeVisible)
-            {
-                EnsureSurfaceTileRenderMesh(Source, *Surface, *Tile, LoadMessage);
-            }
+            EnsureSurfaceTileRenderMesh(Source, *Surface, *Tile, LoadMessage);
         }
         else
         {
@@ -3246,9 +3294,7 @@ void UCSTopoSurveySubsystem::UpdateVisibleSurfaceTiles(FCSTopoPointCloudSource& 
         return;
     }
 
-    const double VisibleRadius = FMath::Max(
-        ActiveProject.SurfaceSettings.VisibleTileRadiusSourceUnits,
-        ActiveProject.SurfaceSettings.TileSizeSourceUnits * 2.0) + (ActiveProject.SurfaceSettings.TileSizeSourceUnits * 0.15);
+    const double VisibleRadius = ResolveSurfaceVisibleRadiusSourceUnits(Source, ActiveProject.SurfaceSettings);
     Surface->RuntimeVisibleTileIds.Reset();
 
     for (FCSTopoLoadedSurfaceTile& Tile : Surface->Tiles)
@@ -3274,7 +3320,9 @@ void UCSTopoSurveySubsystem::UpdateVisibleSurfaceTiles(FCSTopoPointCloudSource& 
     }
 
     Surface->LastVisibilitySourceLocation = SourceLocation;
+    Surface->LastVisibilityRadiusSourceUnits = VisibleRadius;
     Surface->bHasVisibilitySourceLocation = true;
+    Surface->bPendingTileLoadSortDirty = true;
     RebuildSurfaceCollisionProxy(Source, *Surface, SourceLocation, bForce);
     RefreshSurfacePresentation(Source);
 }
@@ -3567,6 +3615,78 @@ bool UCSTopoSurveySubsystem::GetActivePointCloudPointSize(float& PointSize, FStr
     PointSize = Component->PointSize;
     ErrorMessage.Empty();
     return true;
+}
+
+void UCSTopoSurveySubsystem::SetSurfaceViewTileMultiplier(double Multiplier)
+{
+    ActiveProject.SurfaceSettings.VisibleTileRadiusTileMultiplier = FMath::Clamp(Multiplier, 2.0, 12.0);
+    if (FCSTopoPointCloudSource* Source = FindPointCloudMutable(ActiveProject.ActivePointCloudId))
+    {
+        if (FCSTopoLoadedSurface* Surface = LoadedSurfaces.Find(Source->SourceId))
+        {
+            const FVector RefreshLocation = Surface->bHasVisibilitySourceLocation
+                ? Surface->LastVisibilitySourceLocation
+                : GetSourceCenter(*Source);
+            UpdateVisibleSurfaceTiles(*Source, RefreshLocation, true);
+        }
+    }
+}
+
+double UCSTopoSurveySubsystem::GetSurfaceViewTileMultiplier() const
+{
+    return FMath::Clamp(ActiveProject.SurfaceSettings.VisibleTileRadiusTileMultiplier, 2.0, 12.0);
+}
+
+double UCSTopoSurveySubsystem::GetApproxSurfaceViewRadiusSourceUnits() const
+{
+    const FCSTopoPointCloudSource* Source = FindPointCloud(ActiveProject.ActivePointCloudId);
+    if (Source == nullptr)
+    {
+        const double TileSize = FMath::Max(ActiveProject.SurfaceSettings.TileSizeSourceUnits, 1.0);
+        return TileSize * GetSurfaceViewTileMultiplier();
+    }
+    return ResolveSurfaceVisibleRadiusSourceUnits(*Source, ActiveProject.SurfaceSettings);
+}
+
+void UCSTopoSurveySubsystem::SetNavigationWalkEyeHeight(float EyeHeight)
+{
+    ActiveProject.NavigationSettings.WalkEyeHeight = FMath::Clamp(EyeHeight, 96.0f, 240.0f);
+}
+
+void UCSTopoSurveySubsystem::SetNavigationWalkSpeed(float Speed)
+{
+    ActiveProject.NavigationSettings.WalkSpeed = FMath::Clamp(Speed, 100.0f, 2400.0f);
+}
+
+void UCSTopoSurveySubsystem::SetNavigationFlySpeedScale(float Scale)
+{
+    ActiveProject.NavigationSettings.FlySpeedScale = FMath::Clamp(Scale, 0.25f, 4.0f);
+}
+
+void UCSTopoSurveySubsystem::SetNavigationLookSensitivity(float Sensitivity)
+{
+    ActiveProject.NavigationSettings.LookSensitivity = FMath::Clamp(Sensitivity, 0.05f, 2.0f);
+}
+
+void UCSTopoSurveySubsystem::SetNavigationPrecisionSensitivity(float Sensitivity)
+{
+    ActiveProject.NavigationSettings.PrecisionSensitivity = FMath::Clamp(Sensitivity, 0.05f, 1.0f);
+}
+
+void UCSTopoSurveySubsystem::ResetRuntimeTuningOptions()
+{
+    ActiveProject.SurfaceSettings.VisibleTileRadiusTileMultiplier = 6.0;
+    ActiveProject.NavigationSettings = FCSTopoNavigationSettings();
+    if (FCSTopoPointCloudSource* Source = FindPointCloudMutable(ActiveProject.ActivePointCloudId))
+    {
+        if (FCSTopoLoadedSurface* Surface = LoadedSurfaces.Find(Source->SourceId))
+        {
+            const FVector RefreshLocation = Surface->bHasVisibilitySourceLocation
+                ? Surface->LastVisibilitySourceLocation
+                : GetSourceCenter(*Source);
+            UpdateVisibleSurfaceTiles(*Source, RefreshLocation, true);
+        }
+    }
 }
 
 bool UCSTopoSurveySubsystem::CollectTopoShotFromView(const FVector& ViewOrigin, const FVector& ViewDirection, float TraceRadius, float SampleRadius, FCSTopoShotRecord& Shot, FVector& RenderLocation, FString& ErrorMessage)
@@ -4090,7 +4210,21 @@ void UCSTopoSurveySubsystem::UpdateRuntimeStreaming(const FVector& CameraRenderL
 
     const FVector CameraSourcePoint = RenderToSourcePoint(*Source, CameraRenderLocation);
     UpdateVisibleSurfaceTiles(*Source, CameraSourcePoint, false);
-    ProcessPendingSurfaceTileLoads(*Source, 3, 16ll * 1024ll * 1024ll);
+    int32 TileLoadBudget = 3;
+    int64 TileLoadByteBudget = 16ll * 1024ll * 1024ll;
+    if (const FCSTopoLoadedSurface* Surface = LoadedSurfaces.Find(Source->SourceId))
+    {
+        if (Surface->PendingTileLoadIds.Num() > 48)
+        {
+            TileLoadBudget = 5;
+            TileLoadByteBudget = 24ll * 1024ll * 1024ll;
+        }
+        else if (Surface->PendingTileLoadIds.Num() > 16)
+        {
+            TileLoadBudget = 4;
+        }
+    }
+    ProcessPendingSurfaceTileLoads(*Source, TileLoadBudget, TileLoadByteBudget);
 
     if (!ShouldUseCopcWindowStreaming(*Source))
     {

@@ -80,6 +80,7 @@ ACSTopoSurveyPawn::ACSTopoSurveyPawn()
 void ACSTopoSurveyPawn::BeginPlay()
 {
     Super::BeginPlay();
+    ApplyProjectNavigationSettings();
     const UGameInstance* GameInstance = GetGameInstance();
     const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
     if (Survey != nullptr && !Survey->IsSurveyReady())
@@ -101,6 +102,7 @@ void ACSTopoSurveyPawn::Tick(float DeltaSeconds)
     UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
     if (Survey != nullptr && Camera != nullptr)
     {
+        ApplyProjectNavigationSettings();
         Survey->UpdateRuntimeStreaming(Camera->GetComponentLocation(), Camera->GetForwardVector(), DeltaSeconds);
         Survey->UpdateSurveyMapPose(Camera->GetComponentLocation(), Camera->GetForwardVector());
         FocusOnActivePointCloudIfNeeded();
@@ -790,6 +792,52 @@ void ACSTopoSurveyPawn::ConfigureMovementForMode()
     }
 }
 
+void ACSTopoSurveyPawn::ApplyProjectNavigationSettings()
+{
+    const UGameInstance* GameInstance = GetGameInstance();
+    const UCSTopoSurveySubsystem* Survey = GameInstance != nullptr ? GameInstance->GetSubsystem<UCSTopoSurveySubsystem>() : nullptr;
+    if (Survey == nullptr)
+    {
+        return;
+    }
+
+    const FCSTopoNavigationSettings& Settings = Survey->ActiveProject.NavigationSettings;
+    const float WalkEyeHeight = FMath::Clamp(Settings.WalkEyeHeight, 96.0f, 240.0f);
+    const float NewWalkSpeed = FMath::Clamp(Settings.WalkSpeed, 100.0f, 2400.0f);
+    const float NewFlySpeedScale = FMath::Clamp(Settings.FlySpeedScale, 0.25f, 4.0f);
+    const float NewLookSensitivity = FMath::Clamp(Settings.LookSensitivity, 0.05f, 2.0f);
+    const float NewPrecisionSensitivity = FMath::Clamp(Settings.PrecisionSensitivity, 0.05f, 1.0f);
+
+    const bool bSpeedChanged =
+        !FMath::IsNearlyEqual(WalkSpeed, NewWalkSpeed)
+        || !FMath::IsNearlyEqual(RuntimeFlySpeedScale, NewFlySpeedScale);
+    const bool bLookChanged =
+        !FMath::IsNearlyEqual(BaseLookSensitivityScalar, NewLookSensitivity)
+        || !FMath::IsNearlyEqual(PrecisionLookSensitivityScalar, NewPrecisionSensitivity);
+
+    WalkSpeed = NewWalkSpeed;
+    WalkSprintSpeed = WalkSpeed * 2.0f;
+    RuntimeFlySpeedScale = NewFlySpeedScale;
+    BaseLookSensitivityScalar = NewLookSensitivity;
+    PrecisionLookSensitivityScalar = NewPrecisionSensitivity;
+
+    if (Camera != nullptr)
+    {
+        FVector RelativeLocation = Camera->GetRelativeLocation();
+        RelativeLocation.Z = FMath::Max(8.0f, WalkEyeHeight - GroundClearance);
+        Camera->SetRelativeLocation(RelativeLocation);
+    }
+
+    if (bSpeedChanged)
+    {
+        RefreshMovementSpeed();
+    }
+    if (bLookChanged)
+    {
+        CurrentLookSensitivityScalar = BaseLookSensitivityScalar * (bPrecisionModeActive ? PrecisionLookSensitivityScalar : 1.0f);
+    }
+}
+
 void ACSTopoSurveyPawn::RefreshMovementSpeed()
 {
     if (Movement == nullptr)
@@ -826,10 +874,10 @@ float ACSTopoSurveyPawn::GetCurrentFlyBaseSpeed() const
 {
     if (!FlySpeedBands.IsValidIndex(CurrentFlySpeedBandIndex))
     {
-        return 18000.0f;
+        return 18000.0f * RuntimeFlySpeedScale;
     }
 
-    return FlySpeedBands[CurrentFlySpeedBandIndex];
+    return FlySpeedBands[CurrentFlySpeedBandIndex] * RuntimeFlySpeedScale;
 }
 
 float ACSTopoSurveyPawn::GetPrecisionMovementScalar() const
