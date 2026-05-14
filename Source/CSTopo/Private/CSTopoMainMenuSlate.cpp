@@ -1,10 +1,12 @@
 #include "CSTopoMainMenuSlate.h"
 
+#include "CSTopoPointCloudImport.h"
 #include "CSTopoPointCloudToolbarSlate.h"
 #include "CSTopoSurveySubsystem.h"
 #include "DesktopPlatformModule.h"
 #include "Engine/Engine.h"
 #include "IDesktopPlatform.h"
+#include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
@@ -127,6 +129,19 @@ TSharedRef<SWidget> SCSTopoMainMenu::BuildFileMenu()
                     [
                         SNew(STextBlock)
                         .Text(FText::FromString(TEXT("New Project...")))
+                        .ColorAndOpacity(MenuTextColor)
+                    ]
+                ]
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                [
+                    SNew(SButton)
+                    .ButtonStyle(FCoreStyle::Get(), TEXT("NoBorder"))
+                    .ContentPadding(FMargin(8.0f, 4.0f))
+                    .OnClicked(this, &SCSTopoMainMenu::CheckPdalRuntime)
+                    [
+                        SNew(STextBlock)
+                        .Text(FText::FromString(TEXT("Check PDAL Runtime")))
                         .ColorAndOpacity(MenuTextColor)
                     ]
                 ]
@@ -620,6 +635,17 @@ FReply SCSTopoMainMenu::ExitApplication()
     {
         OnExit.Execute();
     }
+    return FReply::Handled();
+}
+
+FReply SCSTopoMainMenu::CheckPdalRuntime()
+{
+    bFileMenuOpen = false;
+    bOptionsMenuOpen = false;
+
+    FString Message;
+    UCSTopoPointCloudImport::EnsurePdalRuntimeAvailable(Message);
+    FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
     return FReply::Handled();
 }
 

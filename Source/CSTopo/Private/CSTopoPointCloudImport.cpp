@@ -2,13 +2,19 @@
 
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
+#include "Dom/JsonObject.h"
+#include "Misc/MessageDialog.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 namespace
 {
 const TCHAR* QgisPdalPath = TEXT("C:/Program Files/QGIS 3.40.12/bin/pdal.exe");
 const TCHAR* BundledPdalRelativePath = TEXT("ThirdParty/PDAL/Windows/bin/pdal.exe");
+const TCHAR* PdalRuntimeManifestRelativePath = TEXT("Config/CSTopoPdalRuntime.json");
+const TCHAR* PdalBootstrapScriptRelativePath = TEXT("scripts/bootstrap_pdal_runtime.py");
 
 uint16 ReadUInt16(const TArray<uint8>& Bytes, int32 Offset)
 {
@@ -136,6 +142,61 @@ TArray<FString> BuildBundledPdalCandidates()
     return Candidates;
 }
 
+TArray<FString> BuildProjectFileCandidates(const TCHAR* RelativePath)
+{
+    TArray<FString> Candidates;
+    AddPdalCandidate(Candidates, FPaths::Combine(FPaths::ProjectDir(), RelativePath));
+    AddPdalCandidate(Candidates, FPaths::Combine(FPaths::LaunchDir(), RelativePath));
+
+    FString BaseDir = FPlatformProcess::BaseDir();
+    AddPdalCandidate(Candidates, FPaths::Combine(BaseDir, RelativePath));
+    AddPdalCandidate(Candidates, FPaths::Combine(BaseDir, TEXT(".."), TEXT(".."), TEXT(".."), RelativePath));
+    AddPdalCandidate(Candidates, FPaths::Combine(BaseDir, TEXT(".."), TEXT(".."), TEXT(".."), TEXT(".."), RelativePath));
+    return Candidates;
+}
+
+bool FindProjectFile(const TCHAR* RelativePath, FString& OutPath)
+{
+    for (const FString& Candidate : BuildProjectFileCandidates(RelativePath))
+    {
+        if (FPaths::FileExists(Candidate))
+        {
+            OutPath = Candidate;
+            return true;
+        }
+    }
+    OutPath.Empty();
+    return false;
+}
+
+FString BuildPdalRuntimePromptSummary()
+{
+    FString ManifestPath;
+    FString ManifestText;
+    if (!FindProjectFile(PdalRuntimeManifestRelativePath, ManifestPath)
+        || !FFileHelper::LoadFileToString(ManifestText, *ManifestPath))
+    {
+        return TEXT("The CSTopo PDAL runtime manifest is missing.");
+    }
+
+    TSharedPtr<FJsonObject> ManifestObject;
+    const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ManifestText);
+    if (!FJsonSerializer::Deserialize(Reader, ManifestObject) || !ManifestObject.IsValid())
+    {
+        return TEXT("The CSTopo PDAL runtime manifest could not be read.");
+    }
+
+    FString Version;
+    FString DownloadUrl;
+    ManifestObject->TryGetStringField(TEXT("version"), Version);
+    ManifestObject->TryGetStringField(TEXT("download_url"), DownloadUrl);
+    const FString VersionSuffix = Version.IsEmpty() ? FString() : FString::Printf(TEXT(" (%s)"), *Version);
+    return FString::Printf(
+        TEXT("CSTopo can download its pinned PDAL runtime%s.\n\nSource:\n%s"),
+        *VersionSuffix,
+        DownloadUrl.IsEmpty() ? TEXT("(manifest URL missing)") : *DownloadUrl);
+}
+
 FString ReadPdalVersion(const FString& PdalPath)
 {
     int32 ReturnCode = 0;
@@ -204,6 +265,53 @@ void ConfigurePdalRuntimeEnvironment(const FCSTopoPdalExecutableInfo& PdalInfo)
         SetEnvironmentVariableIfDirectoryExists(TEXT("GDAL_DRIVER_PATH"), FPaths::Combine(RuntimeRoot, TEXT("apps"), TEXT("gdal"), TEXT("lib"), TEXT("gdalplugins")));
         SetEnvironmentVariableIfDirectoryExists(TEXT("PROJ_DATA"), FPaths::Combine(RuntimeRoot, TEXT("share"), TEXT("proj")));
     }
+}
+
+bool RunPdalBootstrapScript(FString& StatusMessage)
+{
+    FString ScriptPath;
+    if (!FindProjectFile(PdalBootstrapScriptRelativePath, ScriptPath))
+    {
+        StatusMessage = TEXT("CSTopo's PDAL bootstrap script was not found. Restore scripts/bootstrap_pdal_runtime.py.");
+        return false;
+    }
+
+    const FString WorkingDirectory = FPaths::ProjectDir();
+    TArray<FString> Attempts;
+    Attempts.Add(FString::Printf(TEXT("python \"%s\""), *ScriptPath));
+    Attempts.Add(FString::Printf(TEXT("py -3 \"%s\""), *ScriptPath));
+
+    FString CombinedFailures;
+    for (const FString& Attempt : Attempts)
+    {
+        FString Executable;
+        FString Arguments;
+        if (!Attempt.Split(TEXT(" "), &Executable, &Arguments))
+        {
+            continue;
+        }
+
+        int32 ReturnCode = 0;
+        FString StdOut;
+        FString StdErr;
+        const bool bExecOk = FPlatformProcess::ExecProcess(*Executable, *Arguments, &ReturnCode, &StdOut, &StdErr, *WorkingDirectory);
+        if (bExecOk && ReturnCode == 0)
+        {
+            StatusMessage = StdOut.TrimStartAndEnd();
+            return true;
+        }
+
+        CombinedFailures += FString::Printf(
+            TEXT("%s %s\nReturn code: %d\n%s\n%s\n\n"),
+            *Executable,
+            *Arguments,
+            ReturnCode,
+            *StdOut.TrimStartAndEnd(),
+            *StdErr.TrimStartAndEnd());
+    }
+
+    StatusMessage = FString::Printf(TEXT("PDAL runtime download/install failed.\n\n%s"), *CombinedFailures.TrimStartAndEnd());
+    return false;
 }
 
 FDateTime GetFileTimestampOrDefault(const FString& Path)
@@ -461,7 +569,7 @@ bool UCSTopoPointCloudImport::FindPdalExecutableInfo(FCSTopoPdalExecutableInfo& 
         return true;
     }
 
-    ErrorMessage = TEXT("CSTopo's bundled PDAL runtime is missing or damaged. Restore ThirdParty/PDAL/Windows or set CSTOPO_PDAL_PATH to a valid pdal.exe for development.");
+    ErrorMessage = TEXT("CSTopo's bundled PDAL runtime is missing or damaged. Use CSTopo's PDAL runtime download, restore ThirdParty/PDAL/Windows, or set CSTOPO_PDAL_PATH to a valid pdal.exe for development.");
     return false;
 }
 
@@ -478,6 +586,53 @@ FString UCSTopoPointCloudImport::DescribePdalRuntime()
         *PdalInfo.Version,
         *PdalInfo.Source,
         *PdalInfo.Path);
+}
+
+bool UCSTopoPointCloudImport::EnsurePdalRuntimeAvailable(FString& StatusMessage)
+{
+    FCSTopoPdalExecutableInfo PdalInfo;
+    FString ErrorMessage;
+    if (FindPdalExecutableInfo(PdalInfo, ErrorMessage))
+    {
+        StatusMessage = FString::Printf(TEXT("PDAL is ready: %s | source: %s | path: %s"),
+            *PdalInfo.Version,
+            *PdalInfo.Source,
+            *PdalInfo.Path);
+        return true;
+    }
+
+    const FString Prompt = FString::Printf(
+        TEXT("PDAL runtime missing\n\n%s\n\n%s\n\nDownload and install the CSTopo-managed PDAL runtime now?"),
+        *ErrorMessage,
+        *BuildPdalRuntimePromptSummary());
+    const EAppReturnType::Type Response = FMessageDialog::Open(EAppMsgType::YesNo, FText::FromString(Prompt));
+    if (Response != EAppReturnType::Yes)
+    {
+        StatusMessage = TEXT("PDAL runtime download canceled. CSTopo needs PDAL for COPC cache builds, COPC window extraction, and surface ground classification.");
+        return false;
+    }
+
+    FString BootstrapStatus;
+    if (!RunPdalBootstrapScript(BootstrapStatus))
+    {
+        StatusMessage = BootstrapStatus;
+        FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(StatusMessage));
+        return false;
+    }
+
+    if (!FindPdalExecutableInfo(PdalInfo, ErrorMessage))
+    {
+        StatusMessage = FString::Printf(TEXT("PDAL runtime installer finished, but CSTopo still could not find pdal.exe. %s"), *ErrorMessage);
+        FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(StatusMessage));
+        return false;
+    }
+
+    StatusMessage = FString::Printf(TEXT("PDAL runtime installed and selected: %s | source: %s | path: %s"),
+        *PdalInfo.Version,
+        *PdalInfo.Source,
+        *PdalInfo.Path);
+    FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(StatusMessage));
+    return true;
 }
 
 FString UCSTopoPointCloudImport::BuildPdalCopcCommand(const FCSTopoImportOptions& Options)

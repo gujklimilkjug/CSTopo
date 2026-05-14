@@ -41,6 +41,7 @@ private:
     FReply ImportPointCloud();
     FReply TogglePointCloudManager();
     FReply ToggleCloudOverlay();
+    FReply CheckPdalRuntime();
     FReply ExitApplication();
     FReply ResetRuntimeOptions();
     FText GetCloudOverlayButtonText() const;

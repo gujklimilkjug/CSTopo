@@ -38,5 +38,18 @@ public class CSTopo : ModuleRules
                 RuntimeDependencies.Add(RuntimeFile, StagedFileType.NonUFS);
             }
         }
+
+        string ProjectRoot = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", ".."));
+        string PdalRuntimeManifest = Path.Combine(ProjectRoot, "Config", "CSTopoPdalRuntime.json");
+        if (File.Exists(PdalRuntimeManifest))
+        {
+            RuntimeDependencies.Add(PdalRuntimeManifest, StagedFileType.NonUFS);
+        }
+
+        string PdalBootstrapScript = Path.Combine(ProjectRoot, "scripts", "bootstrap_pdal_runtime.py");
+        if (File.Exists(PdalBootstrapScript))
+        {
+            RuntimeDependencies.Add(PdalBootstrapScript, StagedFileType.NonUFS);
+        }
     }
 }

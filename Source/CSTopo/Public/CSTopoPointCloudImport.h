@@ -116,6 +116,9 @@ public:
     static FString DescribePdalRuntime();
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Import")
+    static bool EnsurePdalRuntimeAvailable(FString& StatusMessage);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Import")
     static FString BuildPdalCopcCommand(const FCSTopoImportOptions& Options);
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Import")

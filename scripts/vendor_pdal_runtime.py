@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 
 
@@ -116,14 +118,53 @@ def vendor_runtime(qgis_root: Path, output_root: Path, dry_run: bool) -> None:
     print(f"{'Would copy' if dry_run else 'Copied'} {copied} runtime file(s).")
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def package_runtime(runtime_root: Path, zip_path: Path) -> str:
+    pdal_path = runtime_root / "bin" / "pdal.exe"
+    if not pdal_path.exists():
+        raise SystemExit(f"PDAL executable was not found in prepared runtime: {pdal_path}")
+
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    zip_path_resolved = zip_path.resolve()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for item in sorted(runtime_root.rglob("*")):
+            if not item.is_file():
+                continue
+            if item.resolve() == zip_path_resolved:
+                continue
+            archive.write(item, item.relative_to(runtime_root).as_posix())
+
+    checksum = sha256_file(zip_path)
+    print(f"Packaged runtime ZIP: {zip_path}")
+    print(f"SHA-256: {checksum}")
+    print("Manifest checksum field:")
+    print(f'  "sha256": "{checksum}"')
+    return checksum
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Populate CSTopo's bundled Windows PDAL runtime from a local QGIS/OSGeo4W install.")
     parser.add_argument("--qgis-root", type=Path, default=DEFAULT_QGIS_ROOT, help="source QGIS/OSGeo4W installation root")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT, help="output ThirdParty/PDAL/Windows runtime folder")
     parser.add_argument("--dry-run", action="store_true", help="show files without copying")
+    parser.add_argument("--package-zip", type=Path, help="zip the prepared runtime folder and print its manifest SHA-256")
+    parser.add_argument("--package-only", action="store_true", help="skip copying from QGIS and package the existing output folder")
     args = parser.parse_args()
 
-    vendor_runtime(args.qgis_root, args.out, args.dry_run)
+    if not args.package_only:
+        vendor_runtime(args.qgis_root, args.out, args.dry_run)
+
+    if args.package_zip:
+        if args.dry_run:
+            raise SystemExit("--package-zip cannot be combined with --dry-run")
+        package_runtime(args.out, args.package_zip)
 
 
 if __name__ == "__main__":

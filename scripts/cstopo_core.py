@@ -1514,7 +1514,8 @@ def resolve_pdal_executable_info(
         info.version = _read_pdal_version(info.path) if include_version else "unknown"
         return info
     raise FileNotFoundError(
-        "CSTopo's bundled PDAL runtime is missing or damaged. Restore ThirdParty/PDAL/Windows "
+        "CSTopo's bundled PDAL runtime is missing or damaged. Run "
+        "`python scripts/bootstrap_pdal_runtime.py`, restore ThirdParty/PDAL/Windows, "
         "or set CSTOPO_PDAL_PATH to a valid pdal.exe for development."
     )
 

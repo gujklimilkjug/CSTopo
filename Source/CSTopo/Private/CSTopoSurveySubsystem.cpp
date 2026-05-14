@@ -1250,7 +1250,11 @@ bool UCSTopoSurveySubsystem::StartCopcCacheBuild(const FString& SourceId, FStrin
     FCSTopoPdalExecutableInfo PdalInfo;
     if (!UCSTopoPointCloudImport::FindPdalExecutableInfo(PdalInfo, ErrorMessage))
     {
-        return false;
+        if (!UCSTopoPointCloudImport::EnsurePdalRuntimeAvailable(ErrorMessage)
+            || !UCSTopoPointCloudImport::FindPdalExecutableInfo(PdalInfo, ErrorMessage))
+        {
+            return false;
+        }
     }
     PdalPath = PdalInfo.Path;
 
@@ -1334,6 +1338,13 @@ bool UCSTopoSurveySubsystem::StartSurfaceBuild(const FString& SourceId, bool bFo
     if (SurfaceBuildProcessHandle.IsValid())
     {
         ErrorMessage = TEXT("A surface build is already running.");
+        return false;
+    }
+
+    FCSTopoPdalExecutableInfo PdalInfo;
+    if (!UCSTopoPointCloudImport::FindPdalExecutableInfo(PdalInfo, ErrorMessage)
+        && !UCSTopoPointCloudImport::EnsurePdalRuntimeAvailable(ErrorMessage))
+    {
         return false;
     }
 
@@ -4681,7 +4692,11 @@ bool UCSTopoSurveySubsystem::StartRuntimeWindowUpdate(FCSTopoPointCloudSource& S
     FCSTopoPdalExecutableInfo PdalInfo;
     if (!UCSTopoPointCloudImport::FindPdalExecutableInfo(PdalInfo, ErrorMessage))
     {
-        return false;
+        if (!UCSTopoPointCloudImport::EnsurePdalRuntimeAvailable(ErrorMessage)
+            || !UCSTopoPointCloudImport::FindPdalExecutableInfo(PdalInfo, ErrorMessage))
+        {
+            return false;
+        }
     }
     PdalPath = PdalInfo.Path;
 

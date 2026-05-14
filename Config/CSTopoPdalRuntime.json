@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "platform": "Windows",
+  "version": "2.10.1",
+  "download_url": "https://github.com/gujklimilkjug/CSTopo/releases/download/pdal-runtime-2.10.1/cstopo-pdal-runtime-windows-2.10.1.zip",
+  "sha256": "3ee28cb6999a6f3f4b195ec60e82bbf093fc02fd9c78e1d29be8c3dd7595ba27",
+  "install_dir": "ThirdParty/PDAL/Windows",
+  "executable_path": "bin/pdal.exe"
+}

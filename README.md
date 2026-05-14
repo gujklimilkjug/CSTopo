@@ -125,8 +125,17 @@ That command writes a `.cstopo` project, a point CSV, and a DXF containing coded
 CSTopo looks for PDAL in this order:
 
 - `CSTOPO_PDAL_PATH`
+- bundled CSTopo runtime at `ThirdParty/PDAL/Windows/bin/pdal.exe`
 - `pdal.exe` on `PATH`
-- `C:\Program Files\QGIS 3.40.12\bin\pdal.exe`
+- legacy development fallback at `C:\Program Files\QGIS 3.40.12\bin\pdal.exe`
+
+If no valid PDAL is found, install the pinned CSTopo runtime from the manifest:
+
+```powershell
+python scripts/bootstrap_pdal_runtime.py
+```
+
+The runtime ZIP is hosted as a GitHub Release asset, not committed to the repo. The manifest lives at `Config/CSTopoPdalRuntime.json` and must contain the release ZIP URL plus its SHA-256 checksum.
 
 Inspect a source LAS/LAZ/COPC file:
 
@@ -170,6 +179,12 @@ For `KT-192.las`, the builder detects existing class-2 ground points and produce
 
 Open `CSTopo.uproject` from an Unreal Engine 5.7 install on Windows. The project enables the LiDAR Point Cloud plugin for early visualization/prototyping. The production streaming path should replace any whole-asset loading for 500M+ point clouds.
 
-PDAL is not vendored here. This workspace currently uses the QGIS-bundled PDAL 2.9.0 executable when `pdal.exe` is not on PATH.
+CSTopo does not commit PDAL binaries to Git. Use `scripts/vendor_pdal_runtime.py` to prepare a local runtime from QGIS/OSGeo4W, then package it for release publishing:
+
+```powershell
+python scripts/vendor_pdal_runtime.py --package-only --package-zip dist\cstopo-pdal-runtime-windows-2.10.1.zip
+```
+
+The package helper prints the SHA-256 value to paste into `Config/CSTopoPdalRuntime.json`.
 
 The Unreal C++ module has been compiled against UE 5.7. The Python core and export/import workflow are covered by unit tests.

@@ -1,12 +1,15 @@
 import csv
+import hashlib
 import json
 import math
 import struct
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 from pathlib import Path
 
+from scripts.bootstrap_pdal_runtime import BootstrapError, bootstrap_pdal_runtime
 from scripts.cstopo_core import (
     CSTopoProject,
     DEFAULT_QGIS_PDAL,
@@ -67,6 +70,31 @@ from scripts.cstopo_core import (
 
 
 class CSTopoCoreTests(unittest.TestCase):
+    def _write_pdal_runtime_manifest(self, root: Path, zip_path: Path, checksum: str) -> Path:
+        manifest_path = root / "Config" / "CSTopoPdalRuntime.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "platform": "Windows",
+                    "version": "2.10.1",
+                    "download_url": "https://example.invalid/cstopo-pdal-runtime-windows-2.10.1.zip",
+                    "sha256": checksum,
+                    "install_dir": "ThirdParty/PDAL/Windows",
+                    "executable_path": "bin/pdal.exe",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return manifest_path
+
+    def _write_test_runtime_zip(self, zip_path: Path) -> str:
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("bin/pdal.exe", "fake pdal")
+            archive.writestr("share/proj/test.txt", "proj data")
+        return hashlib.sha256(zip_path.read_bytes()).hexdigest()
+
     def test_pdal_resolver_prefers_environment_override(self):
         with tempfile.TemporaryDirectory() as temp:
             fake_pdal = Path(temp) / "override" / "pdal.exe"
@@ -124,6 +152,56 @@ class CSTopoCoreTests(unittest.TestCase):
             self.assertEqual(env["GDAL_DATA"], str(runtime_root / "apps" / "gdal" / "share" / "gdal"))
             self.assertEqual(env["GDAL_DRIVER_PATH"], str(runtime_root / "apps" / "gdal" / "lib" / "gdalplugins"))
             self.assertEqual(env["PROJ_DATA"], str(runtime_root / "share" / "proj"))
+
+    def test_pdal_bootstrap_rejects_bad_checksum(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            zip_path = root / "runtime.zip"
+            self._write_test_runtime_zip(zip_path)
+            manifest = self._write_pdal_runtime_manifest(root, zip_path, "0" * 64)
+
+            with self.assertRaisesRegex(BootstrapError, "checksum mismatch"):
+                bootstrap_pdal_runtime(
+                    manifest_path=manifest,
+                    runtime_zip=zip_path,
+                    repo_root=root,
+                    skip_exec_validation=True,
+                )
+
+    def test_pdal_bootstrap_succeeds_with_local_test_zip(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            zip_path = root / "runtime.zip"
+            checksum = self._write_test_runtime_zip(zip_path)
+            manifest = self._write_pdal_runtime_manifest(root, zip_path, checksum)
+
+            pdal_path = bootstrap_pdal_runtime(
+                manifest_path=manifest,
+                runtime_zip=zip_path,
+                repo_root=root,
+                skip_exec_validation=True,
+            )
+
+            self.assertEqual(pdal_path, root / "ThirdParty" / "PDAL" / "Windows" / "bin" / "pdal.exe")
+            self.assertTrue(pdal_path.exists())
+            self.assertTrue((root / "ThirdParty" / "PDAL" / "Windows" / "share" / "proj" / "test.txt").exists())
+
+    def test_pdal_bootstrap_rejects_zip_slip(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            zip_path = root / "runtime.zip"
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("../escape.txt", "nope")
+            checksum = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+            manifest = self._write_pdal_runtime_manifest(root, zip_path, checksum)
+
+            with self.assertRaisesRegex(BootstrapError, "unsafe ZIP member"):
+                bootstrap_pdal_runtime(
+                    manifest_path=manifest,
+                    runtime_zip=zip_path,
+                    repo_root=root,
+                    skip_exec_validation=True,
+                )
 
     def test_pdal_resolver_missing_message_matches_standalone_app(self):
         with tempfile.TemporaryDirectory() as temp:
