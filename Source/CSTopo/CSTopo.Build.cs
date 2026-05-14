@@ -1,3 +1,4 @@
+using System.IO;
 using UnrealBuildTool;
 
 public class CSTopo : ModuleRules
@@ -28,5 +29,14 @@ public class CSTopo : ModuleRules
             "Slate",
             "SlateCore"
         });
+
+        string PdalRuntimeDir = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", "..", "ThirdParty", "PDAL", "Windows"));
+        if (Directory.Exists(PdalRuntimeDir))
+        {
+            foreach (string RuntimeFile in Directory.GetFiles(PdalRuntimeDir, "*", SearchOption.AllDirectories))
+            {
+                RuntimeDependencies.Add(RuntimeFile, StagedFileType.NonUFS);
+            }
+        }
     }
 }

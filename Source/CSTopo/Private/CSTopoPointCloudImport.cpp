@@ -8,6 +8,7 @@
 namespace
 {
 const TCHAR* QgisPdalPath = TEXT("C:/Program Files/QGIS 3.40.12/bin/pdal.exe");
+const TCHAR* BundledPdalRelativePath = TEXT("ThirdParty/PDAL/Windows/bin/pdal.exe");
 
 uint16 ReadUInt16(const TArray<uint8>& Bytes, int32 Offset)
 {
@@ -98,6 +99,111 @@ bool ExtractLinearUnit(const FString& Wkt, FString& UnitName, double& UnitToMete
 bool IsExecutableFile(const FString& Path)
 {
     return !Path.IsEmpty() && FPaths::FileExists(Path);
+}
+
+FString NormalizeDependencyPath(const FString& Path)
+{
+    FString Normalized = FPaths::ConvertRelativePathToFull(Path);
+    FPaths::NormalizeFilename(Normalized);
+    FPaths::RemoveDuplicateSlashes(Normalized);
+    return Normalized;
+}
+
+void AddPdalCandidate(TArray<FString>& Candidates, const FString& Candidate)
+{
+    if (Candidate.IsEmpty())
+    {
+        return;
+    }
+
+    const FString Normalized = NormalizeDependencyPath(Candidate);
+    if (!Candidates.Contains(Normalized))
+    {
+        Candidates.Add(Normalized);
+    }
+}
+
+TArray<FString> BuildBundledPdalCandidates()
+{
+    TArray<FString> Candidates;
+    AddPdalCandidate(Candidates, FPaths::Combine(FPaths::ProjectDir(), BundledPdalRelativePath));
+    AddPdalCandidate(Candidates, FPaths::Combine(FPaths::LaunchDir(), BundledPdalRelativePath));
+
+    FString BaseDir = FPlatformProcess::BaseDir();
+    AddPdalCandidate(Candidates, FPaths::Combine(BaseDir, BundledPdalRelativePath));
+    AddPdalCandidate(Candidates, FPaths::Combine(BaseDir, TEXT(".."), TEXT(".."), TEXT(".."), BundledPdalRelativePath));
+    AddPdalCandidate(Candidates, FPaths::Combine(BaseDir, TEXT(".."), TEXT(".."), TEXT(".."), TEXT(".."), BundledPdalRelativePath));
+    return Candidates;
+}
+
+FString ReadPdalVersion(const FString& PdalPath)
+{
+    int32 ReturnCode = 0;
+    FString StdOut;
+    FString StdErr;
+    const FString WorkingDirectory = FPaths::GetPath(PdalPath);
+    if (!FPlatformProcess::ExecProcess(*PdalPath, TEXT("--version"), &ReturnCode, &StdOut, &StdErr, *WorkingDirectory)
+        || ReturnCode != 0)
+    {
+        return TEXT("unknown");
+    }
+
+    FString Combined = StdOut.IsEmpty() ? StdErr : StdOut;
+    TArray<FString> Lines;
+    Combined.ParseIntoArrayLines(Lines, true);
+    for (FString Line : Lines)
+    {
+        Line = Line.TrimStartAndEnd();
+        if (Line.Contains(TEXT("pdal"), ESearchCase::IgnoreCase))
+        {
+            return Line;
+        }
+    }
+    return Combined.TrimStartAndEnd().IsEmpty() ? TEXT("unknown") : Combined.TrimStartAndEnd();
+}
+
+bool IsBundledPdalPath(const FString& PdalPath)
+{
+    FString Normalized = NormalizeDependencyPath(PdalPath);
+    return Normalized.Contains(TEXT("/ThirdParty/PDAL/Windows/bin/"), ESearchCase::IgnoreCase);
+}
+
+FString BuildPdalRuntimeRoot(const FString& PdalPath)
+{
+    return FPaths::GetPath(FPaths::GetPath(NormalizeDependencyPath(PdalPath)));
+}
+
+void SetEnvironmentVariableIfDirectoryExists(const TCHAR* Name, const FString& Path)
+{
+    if (FPaths::DirectoryExists(Path))
+    {
+        FPlatformMisc::SetEnvironmentVar(Name, *Path);
+    }
+}
+
+void ConfigurePdalRuntimeEnvironment(const FCSTopoPdalExecutableInfo& PdalInfo)
+{
+    if (PdalInfo.Path.IsEmpty())
+    {
+        return;
+    }
+
+    const FString BinDirectory = FPaths::GetPath(PdalInfo.Path);
+    FString PathEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("PATH"));
+    if (!PathEnv.Contains(BinDirectory, ESearchCase::IgnoreCase))
+    {
+        PathEnv = BinDirectory + TEXT(";") + PathEnv;
+        FPlatformMisc::SetEnvironmentVar(TEXT("PATH"), *PathEnv);
+    }
+
+    if (IsBundledPdalPath(PdalInfo.Path))
+    {
+        const FString RuntimeRoot = BuildPdalRuntimeRoot(PdalInfo.Path);
+        SetEnvironmentVariableIfDirectoryExists(TEXT("PDAL_DRIVER_PATH"), FPaths::Combine(RuntimeRoot, TEXT("apps"), TEXT("pdal"), TEXT("plugins")));
+        SetEnvironmentVariableIfDirectoryExists(TEXT("GDAL_DATA"), FPaths::Combine(RuntimeRoot, TEXT("apps"), TEXT("gdal"), TEXT("share"), TEXT("gdal")));
+        SetEnvironmentVariableIfDirectoryExists(TEXT("GDAL_DRIVER_PATH"), FPaths::Combine(RuntimeRoot, TEXT("apps"), TEXT("gdal"), TEXT("lib"), TEXT("gdalplugins")));
+        SetEnvironmentVariableIfDirectoryExists(TEXT("PROJ_DATA"), FPaths::Combine(RuntimeRoot, TEXT("share"), TEXT("proj")));
+    }
 }
 
 FDateTime GetFileTimestampOrDefault(const FString& Path)
@@ -292,11 +398,42 @@ bool UCSTopoPointCloudImport::ReadLasHeader(const FString& SourcePath, FCSTopoLa
 
 bool UCSTopoPointCloudImport::FindPdalExecutable(FString& PdalPath)
 {
+    FCSTopoPdalExecutableInfo PdalInfo;
+    FString ErrorMessage;
+    if (FindPdalExecutableInfo(PdalInfo, ErrorMessage))
+    {
+        PdalPath = PdalInfo.Path;
+        return true;
+    }
+
+    PdalPath.Empty();
+    return false;
+}
+
+bool UCSTopoPointCloudImport::FindPdalExecutableInfo(FCSTopoPdalExecutableInfo& PdalInfo, FString& ErrorMessage)
+{
+    PdalInfo = FCSTopoPdalExecutableInfo();
+
     const FString Configured = FPlatformMisc::GetEnvironmentVariable(TEXT("CSTOPO_PDAL_PATH"));
     if (IsExecutableFile(Configured))
     {
-        PdalPath = Configured;
+        PdalInfo.Path = NormalizeDependencyPath(Configured);
+        PdalInfo.Source = TEXT("environment override");
+        ConfigurePdalRuntimeEnvironment(PdalInfo);
+        PdalInfo.Version = ReadPdalVersion(PdalInfo.Path);
         return true;
+    }
+
+    for (const FString& Candidate : BuildBundledPdalCandidates())
+    {
+        if (IsExecutableFile(Candidate))
+        {
+            PdalInfo.Path = Candidate;
+            PdalInfo.Source = TEXT("bundled runtime");
+            ConfigurePdalRuntimeEnvironment(PdalInfo);
+            PdalInfo.Version = ReadPdalVersion(PdalInfo.Path);
+            return true;
+        }
     }
 
     const FString PathEnv = FPlatformMisc::GetEnvironmentVariable(TEXT("PATH"));
@@ -307,19 +444,40 @@ bool UCSTopoPointCloudImport::FindPdalExecutable(FString& PdalPath)
         const FString Candidate = FPaths::Combine(SearchPath, TEXT("pdal.exe"));
         if (IsExecutableFile(Candidate))
         {
-            PdalPath = Candidate;
+            PdalInfo.Path = NormalizeDependencyPath(Candidate);
+            PdalInfo.Source = TEXT("PATH");
+            ConfigurePdalRuntimeEnvironment(PdalInfo);
+            PdalInfo.Version = ReadPdalVersion(PdalInfo.Path);
             return true;
         }
     }
 
     if (IsExecutableFile(QgisPdalPath))
     {
-        PdalPath = QgisPdalPath;
+        PdalInfo.Path = NormalizeDependencyPath(QgisPdalPath);
+        PdalInfo.Source = TEXT("legacy QGIS fallback");
+        ConfigurePdalRuntimeEnvironment(PdalInfo);
+        PdalInfo.Version = ReadPdalVersion(PdalInfo.Path);
         return true;
     }
 
-    PdalPath.Empty();
+    ErrorMessage = TEXT("CSTopo's bundled PDAL runtime is missing or damaged. Restore ThirdParty/PDAL/Windows or set CSTOPO_PDAL_PATH to a valid pdal.exe for development.");
     return false;
+}
+
+FString UCSTopoPointCloudImport::DescribePdalRuntime()
+{
+    FCSTopoPdalExecutableInfo PdalInfo;
+    FString ErrorMessage;
+    if (!FindPdalExecutableInfo(PdalInfo, ErrorMessage))
+    {
+        return ErrorMessage;
+    }
+
+    return FString::Printf(TEXT("PDAL: %s | source: %s | path: %s"),
+        *PdalInfo.Version,
+        *PdalInfo.Source,
+        *PdalInfo.Path);
 }
 
 FString UCSTopoPointCloudImport::BuildPdalCopcCommand(const FCSTopoImportOptions& Options)

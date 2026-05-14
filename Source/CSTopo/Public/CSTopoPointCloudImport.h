@@ -79,6 +79,21 @@ struct FCSTopoLasHeaderInfo
     double LinearUnitToMeters = 0.0;
 };
 
+USTRUCT(BlueprintType)
+struct FCSTopoPdalExecutableInfo
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category = "CSTopo|Import")
+    FString Path;
+
+    UPROPERTY(BlueprintReadOnly, Category = "CSTopo|Import")
+    FString Source;
+
+    UPROPERTY(BlueprintReadOnly, Category = "CSTopo|Import")
+    FString Version;
+};
+
 UCLASS()
 class CSTOPO_API UCSTopoPointCloudImport : public UObject
 {
@@ -93,6 +108,12 @@ public:
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Import")
     static bool FindPdalExecutable(FString& PdalPath);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Import")
+    static bool FindPdalExecutableInfo(FCSTopoPdalExecutableInfo& PdalInfo, FString& ErrorMessage);
+
+    UFUNCTION(BlueprintCallable, Category = "CSTopo|Import")
+    static FString DescribePdalRuntime();
 
     UFUNCTION(BlueprintCallable, Category = "CSTopo|Import")
     static FString BuildPdalCopcCommand(const FCSTopoImportOptions& Options);

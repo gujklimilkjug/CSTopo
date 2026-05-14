@@ -23,6 +23,7 @@ from typing import Dict, Iterator, List, Optional, Sequence, Set, Tuple
 Point3 = Tuple[float, float, float]
 INTERNAL_CONTROL_CODES = {"PT"}
 DEFAULT_QGIS_PDAL = Path(r"C:\Program Files\QGIS 3.40.12\bin\pdal.exe")
+BUNDLED_PDAL_RELATIVE_PATH = Path("ThirdParty") / "PDAL" / "Windows" / "bin" / "pdal.exe"
 SURFACE_MANIFEST_SCHEMA_VERSION = "6.0"
 SURFACE_BUILD_METHOD_TIN = "BufferedDelaunayTIN"
 SURFACE_BUILD_METHOD_GLOBAL_TIN = "GlobalDelaunayTIN"
@@ -36,6 +37,13 @@ CSTIN_BINARY_MAGIC = b"CSTTIN1\0"
 CSTIN_BINARY_VERSION = 1
 BUILT_IN_CODE_LIST_PATH = Path(__file__).resolve().parents[1] / "Config" / "CSTopoCodeList.json"
 BUILT_IN_CONTROL_CODE_LIST_PATH = Path(__file__).resolve().parents[1] / "Config" / "CSTopoControlCodeList.json"
+
+
+@dataclass
+class PdalExecutableInfo:
+    path: str
+    source: str
+    version: str = "unknown"
 
 
 @dataclass
@@ -1434,24 +1442,128 @@ def build_pdal_copc_command(source_path: Path, cache_dir: Path) -> List[str]:
     return [find_pdal_executable(), "translate", str(source_path), str(output_path), "--writer", "writers.copc"]
 
 
-def find_pdal_executable() -> str:
-    configured = os.environ.get("CSTOPO_PDAL_PATH")
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _candidate_bundled_pdal_paths(repo_root: Optional[Path] = None) -> List[Path]:
+    root = repo_root or _repo_root()
+    candidates = [root / BUNDLED_PDAL_RELATIVE_PATH]
+    if repo_root is None:
+        candidates.extend(
+            [
+                Path.cwd() / BUNDLED_PDAL_RELATIVE_PATH,
+                Path(sys.executable).resolve().parent / BUNDLED_PDAL_RELATIVE_PATH,
+                Path(sys.executable).resolve().parent.parent.parent / BUNDLED_PDAL_RELATIVE_PATH,
+            ]
+        )
+    unique: List[Path] = []
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        if resolved not in unique:
+            unique.append(resolved)
+    return unique
+
+
+def _read_pdal_version(path: str) -> str:
+    try:
+        result = subprocess.run(
+            [path, "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=build_pdal_runtime_env(PdalExecutableInfo(path, "diagnostic")),
+            cwd=str(Path(path).parent),
+        )
+    except Exception:
+        return "unknown"
+    combined = result.stdout or result.stderr
+    for line in combined.splitlines():
+        if "pdal" in line.lower():
+            return line.strip()
+    return combined.strip() or "unknown"
+
+
+def resolve_pdal_executable_info(
+    env: Optional[Dict[str, str]] = None,
+    search_path: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+    include_version: bool = True,
+) -> PdalExecutableInfo:
+    env = env if env is not None else os.environ
+    configured = env.get("CSTOPO_PDAL_PATH", "")
     if configured and Path(configured).exists():
-        return configured
-    on_path = shutil.which("pdal")
+        info = PdalExecutableInfo(str(Path(configured).resolve()), "environment override")
+        info.version = _read_pdal_version(info.path) if include_version else "unknown"
+        return info
+
+    for candidate in _candidate_bundled_pdal_paths(repo_root):
+        if candidate.exists():
+            info = PdalExecutableInfo(str(candidate), "bundled runtime")
+            info.version = _read_pdal_version(info.path) if include_version else "unknown"
+            return info
+
+    on_path = shutil.which("pdal", path=search_path if search_path is not None else env.get("PATH"))
     if on_path:
-        return on_path
+        info = PdalExecutableInfo(str(Path(on_path).resolve()), "PATH")
+        info.version = _read_pdal_version(info.path) if include_version else "unknown"
+        return info
+
     if DEFAULT_QGIS_PDAL.exists():
-        return str(DEFAULT_QGIS_PDAL)
+        info = PdalExecutableInfo(str(DEFAULT_QGIS_PDAL), "legacy QGIS fallback")
+        info.version = _read_pdal_version(info.path) if include_version else "unknown"
+        return info
     raise FileNotFoundError(
-        "PDAL was not found. Add pdal.exe to PATH, set CSTOPO_PDAL_PATH, or install QGIS with PDAL."
+        "CSTopo's bundled PDAL runtime is missing or damaged. Restore ThirdParty/PDAL/Windows "
+        "or set CSTOPO_PDAL_PATH to a valid pdal.exe for development."
     )
+
+
+def find_pdal_executable_info() -> PdalExecutableInfo:
+    return resolve_pdal_executable_info()
+
+
+def find_pdal_executable() -> str:
+    return find_pdal_executable_info().path
+
+
+def build_pdal_runtime_env(info: Optional[PdalExecutableInfo] = None, base_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    info = info or find_pdal_executable_info()
+    env = dict(base_env if base_env is not None else os.environ)
+    pdal_path = Path(info.path)
+    bin_dir = str(pdal_path.parent)
+    current_path = env.get("PATH", "")
+    if bin_dir.lower() not in current_path.lower().split(os.pathsep):
+        env["PATH"] = bin_dir + os.pathsep + current_path if current_path else bin_dir
+
+    runtime_root = pdal_path.parent.parent
+    if "ThirdParty" in {part for part in runtime_root.parts}:
+        pdal_driver_path = runtime_root / "apps" / "pdal" / "plugins"
+        gdal_data = runtime_root / "apps" / "gdal" / "share" / "gdal"
+        gdal_driver_path = runtime_root / "apps" / "gdal" / "lib" / "gdalplugins"
+        proj_data = runtime_root / "share" / "proj"
+        if pdal_driver_path.exists():
+            env["PDAL_DRIVER_PATH"] = str(pdal_driver_path)
+        if gdal_data.exists():
+            env["GDAL_DATA"] = str(gdal_data)
+        if gdal_driver_path.exists():
+            env["GDAL_DRIVER_PATH"] = str(gdal_driver_path)
+        if proj_data.exists():
+            env["PROJ_DATA"] = str(proj_data)
+    return env
+
+
+def run_pdal_command(args: Sequence[str], **kwargs):
+    info = find_pdal_executable_info()
+    command = [info.path, *args]
+    kwargs.setdefault("env", build_pdal_runtime_env(info))
+    return subprocess.run(command, **kwargs)
 
 
 def translate_to_copc(source_path: Path, cache_dir: Path) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     output_path = cache_dir / f"{source_path.stem}.copc.laz"
-    subprocess.run(build_pdal_copc_command(source_path, cache_dir), check=True)
+    run_pdal_command(["translate", str(source_path), str(output_path), "--writer", "writers.copc"], check=True)
     return output_path
 
 
@@ -1599,7 +1711,7 @@ def extract_runtime_window(
     )
     pipeline_path.write_text(json.dumps(pipeline, indent=2), encoding="utf-8")
     try:
-        subprocess.run([find_pdal_executable(), "pipeline", str(pipeline_path)], check=True)
+        run_pdal_command(["pipeline", str(pipeline_path)], check=True)
     finally:
         if pipeline_path.exists():
             pipeline_path.unlink()
@@ -1616,8 +1728,8 @@ def apply_cache_manifest(project: CSTopoProject, manifest: PointCloudCacheManife
 
 
 def read_pdal_info(source_path: Path) -> dict:
-    result = subprocess.run(
-        [find_pdal_executable(), "info", "--summary", str(source_path)],
+    result = run_pdal_command(
+        ["info", "--summary", str(source_path)],
         check=True,
         capture_output=True,
         text=True,
@@ -1626,8 +1738,8 @@ def read_pdal_info(source_path: Path) -> dict:
 
 
 def read_pdal_stats(source_path: Path) -> dict:
-    result = subprocess.run(
-        [find_pdal_executable(), "info", "--stats", str(source_path)],
+    result = run_pdal_command(
+        ["info", "--stats", str(source_path)],
         check=True,
         capture_output=True,
         text=True,
@@ -4455,7 +4567,7 @@ def build_surface_cache(
         pipeline_path.write_text(json.dumps(pipeline, indent=2), encoding="utf-8")
         try:
             with _surface_build_timer(build_timings_seconds, timer_name):
-                subprocess.run([find_pdal_executable(), "pipeline", str(pipeline_path)], check=True)
+                run_pdal_command(["pipeline", str(pipeline_path)], check=True)
         finally:
             if pipeline_path.exists():
                 pipeline_path.unlink()

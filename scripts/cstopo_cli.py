@@ -13,7 +13,7 @@ from cstopo_core import (
     create_source_record,
     export_csv,
     export_dxf,
-    find_pdal_executable,
+    find_pdal_executable_info,
     read_las_header,
     read_pdal_info,
     translate_to_copc,
@@ -166,7 +166,10 @@ def cmd_build_surface(args: argparse.Namespace) -> None:
 
 
 def cmd_pdal_info(args: argparse.Namespace) -> None:
-    print(find_pdal_executable())
+    info = find_pdal_executable_info()
+    print(f"Path: {info.path}")
+    print(f"Source: {info.source}")
+    print(f"Version: {info.version}")
     if args.source:
         info = read_pdal_info(Path(args.source))
         summary = info.get("summary", {})

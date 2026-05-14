@@ -27,7 +27,9 @@ from scripts.cstopo_core import (
     project_from_dict,
     parse_control_command,
     read_las_header,
+    resolve_pdal_executable_info,
     synthetic_road_samples,
+    PdalExecutableInfo,
     _build_surface_tile,
     _build_tin_surface_tile,
     _audit_tin_seams,
@@ -59,11 +61,81 @@ from scripts.cstopo_core import (
     _write_cstin_binary_tile,
     _write_global_tin_surface_tiles,
     _write_global_tin_binary_surface_tiles,
+    build_pdal_runtime_env,
     write_surface_build_progress,
 )
 
 
 class CSTopoCoreTests(unittest.TestCase):
+    def test_pdal_resolver_prefers_environment_override(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fake_pdal = Path(temp) / "override" / "pdal.exe"
+            fake_pdal.parent.mkdir(parents=True)
+            fake_pdal.write_text("fake", encoding="utf-8")
+
+            info = resolve_pdal_executable_info(
+                env={"CSTOPO_PDAL_PATH": str(fake_pdal), "PATH": ""},
+                search_path="",
+                repo_root=Path(temp),
+                include_version=False,
+            )
+
+            self.assertEqual(info.path, str(fake_pdal.resolve()))
+            self.assertEqual(info.source, "environment override")
+
+    def test_pdal_resolver_prefers_bundled_runtime_before_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundled_pdal = root / "ThirdParty" / "PDAL" / "Windows" / "bin" / "pdal.exe"
+            path_pdal = root / "pathbin" / "pdal.exe"
+            bundled_pdal.parent.mkdir(parents=True)
+            path_pdal.parent.mkdir(parents=True)
+            bundled_pdal.write_text("bundled", encoding="utf-8")
+            path_pdal.write_text("path", encoding="utf-8")
+
+            info = resolve_pdal_executable_info(
+                env={"PATH": str(path_pdal.parent)},
+                search_path=str(path_pdal.parent),
+                repo_root=root,
+                include_version=False,
+            )
+
+            self.assertEqual(info.path, str(bundled_pdal.resolve()))
+            self.assertEqual(info.source, "bundled runtime")
+
+    def test_bundled_pdal_runtime_env_points_to_packaged_data_dirs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            runtime_root = Path(temp) / "ThirdParty" / "PDAL" / "Windows"
+            pdal_path = runtime_root / "bin" / "pdal.exe"
+            for directory in (
+                pdal_path.parent,
+                runtime_root / "apps" / "pdal" / "plugins",
+                runtime_root / "apps" / "gdal" / "share" / "gdal",
+                runtime_root / "apps" / "gdal" / "lib" / "gdalplugins",
+                runtime_root / "share" / "proj",
+            ):
+                directory.mkdir(parents=True)
+            pdal_path.write_text("fake", encoding="utf-8")
+
+            env = build_pdal_runtime_env(PdalExecutableInfo(str(pdal_path), "bundled runtime"), {"PATH": ""})
+
+            self.assertTrue(env["PATH"].startswith(str(pdal_path.parent)))
+            self.assertEqual(env["PDAL_DRIVER_PATH"], str(runtime_root / "apps" / "pdal" / "plugins"))
+            self.assertEqual(env["GDAL_DATA"], str(runtime_root / "apps" / "gdal" / "share" / "gdal"))
+            self.assertEqual(env["GDAL_DRIVER_PATH"], str(runtime_root / "apps" / "gdal" / "lib" / "gdalplugins"))
+            self.assertEqual(env["PROJ_DATA"], str(runtime_root / "share" / "proj"))
+
+    def test_pdal_resolver_missing_message_matches_standalone_app(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with mock.patch("scripts.cstopo_core.DEFAULT_QGIS_PDAL", Path(temp) / "missing-qgis" / "pdal.exe"):
+                with self.assertRaisesRegex(FileNotFoundError, "bundled PDAL runtime is missing or damaged"):
+                    resolve_pdal_executable_info(
+                        env={"PATH": ""},
+                        search_path="",
+                        repo_root=Path(temp),
+                        include_version=False,
+                    )
+
     def test_fitted_surface_recovers_plane_elevation(self):
         samples = synthetic_road_samples(5000.0, 1000.0)
         elevation, residual = fit_plane_elevation(samples, 5000.0, 1000.0)

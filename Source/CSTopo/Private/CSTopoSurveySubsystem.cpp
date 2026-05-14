@@ -1247,11 +1247,12 @@ bool UCSTopoSurveySubsystem::StartCopcCacheBuild(const FString& SourceId, FStrin
     }
 
     FString PdalPath;
-    if (!UCSTopoPointCloudImport::FindPdalExecutable(PdalPath))
+    FCSTopoPdalExecutableInfo PdalInfo;
+    if (!UCSTopoPointCloudImport::FindPdalExecutableInfo(PdalInfo, ErrorMessage))
     {
-        ErrorMessage = TEXT("PDAL was not found. Set CSTOPO_PDAL_PATH or install QGIS with PDAL.");
         return false;
     }
+    PdalPath = PdalInfo.Path;
 
     if (Source->CachePath.IsEmpty())
     {
@@ -1266,7 +1267,8 @@ bool UCSTopoSurveySubsystem::StartCopcCacheBuild(const FString& SourceId, FStrin
     int32 ReturnCode = 0;
     FString StdOut;
     FString StdErr;
-    const bool bExecOk = FPlatformProcess::ExecProcess(*PdalPath, *Args, &ReturnCode, &StdOut, &StdErr);
+    const FString PdalWorkingDirectory = FPaths::GetPath(PdalPath);
+    const bool bExecOk = FPlatformProcess::ExecProcess(*PdalPath, *Args, &ReturnCode, &StdOut, &StdErr, *PdalWorkingDirectory);
     if (!bExecOk || ReturnCode != 0)
     {
         Source->CacheState = ECSTopoPointCloudCacheState::Failed;
@@ -4676,11 +4678,12 @@ bool UCSTopoSurveySubsystem::RebuildUserTinPreview(FString& StatusMessage)
 bool UCSTopoSurveySubsystem::StartRuntimeWindowUpdate(FCSTopoPointCloudSource& Source, const FVector& CameraSourcePoint, FString& ErrorMessage)
 {
     FString PdalPath;
-    if (!UCSTopoPointCloudImport::FindPdalExecutable(PdalPath))
+    FCSTopoPdalExecutableInfo PdalInfo;
+    if (!UCSTopoPointCloudImport::FindPdalExecutableInfo(PdalInfo, ErrorMessage))
     {
-        ErrorMessage = TEXT("PDAL was not found. Runtime COPC windowing is unavailable.");
         return false;
     }
+    PdalPath = PdalInfo.Path;
 
     const FString CacheDirectory = GetProjectCacheDirectory();
     const FString OutputPath = UCSTopoPointCloudImport::BuildDefaultRuntimeWindowPath(CacheDirectory, Source.SourceId);
@@ -4705,7 +4708,7 @@ bool UCSTopoSurveySubsystem::StartRuntimeWindowUpdate(FCSTopoPointCloudSource& S
     }
 
     const FString Arguments = FString::Printf(TEXT("pipeline \"%s\""), *PipelinePath);
-    RuntimeWindowProcessHandle = FPlatformProcess::CreateProc(*PdalPath, *Arguments, false, true, true, nullptr, 0, *FPaths::GetPath(OutputPath), nullptr);
+    RuntimeWindowProcessHandle = FPlatformProcess::CreateProc(*PdalPath, *Arguments, false, true, true, nullptr, 0, *FPaths::GetPath(PdalPath), nullptr);
     if (!RuntimeWindowProcessHandle.IsValid())
     {
         ErrorMessage = TEXT("Failed to start PDAL runtime window update.");
